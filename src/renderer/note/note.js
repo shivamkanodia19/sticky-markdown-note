@@ -333,8 +333,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const userDataPath = await ipcRenderer.invoke('get-user-data-path');
   const settingsPath = path.join(userDataPath, 'settings.json');
 
-  // Set user image save path and create folder
-  userImagesDir = path.join(userDataPath, 'notes', 'images');
+  // Set user image save path and create folder. This is kept alongside the
+  // real notes directory (not Electron's userData) so the orphaned-image
+  // scan (which looks for .md files next to the images folder) keeps working.
+  const notesDir = await ipcRenderer.invoke('get-notes-dir');
+  userImagesDir = path.join(notesDir, 'images');
   if (!fs.existsSync(userImagesDir)) {
     fs.mkdirSync(userImagesDir, { recursive: true });
   }

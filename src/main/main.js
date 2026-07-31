@@ -12,7 +12,9 @@ const openNoteWindows = {}; // { fullPath: BrowserWindow }
 
 const stateFilePath = path.join(app.getPath('userData'), 'note-window-state.json');
 
-const notesDir = path.join(app.getPath('userData'), 'notes');
+// Notes are saved directly into Shivam's Obsidian vault Inbox instead of
+// Electron's default userData folder, so they're plain, accessible .md files.
+const notesDir = 'C:\\Users\\shiva\\project manager\\vault\\00 - Inbox';
 if (!fs.existsSync(notesDir)) fs.mkdirSync(notesDir, { recursive: true });
 
 // For saving the last session (open notes)
@@ -339,6 +341,10 @@ ipcMain.on('open-main-window', () => {
 
 ipcMain.handle('get-user-data-path', () => {
   return app.getPath('userData');
+});
+
+ipcMain.handle('get-notes-dir', () => {
+  return notesDir;
 });
 
 ipcMain.handle('get-app-path', () => {

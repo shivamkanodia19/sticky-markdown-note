@@ -17,8 +17,7 @@ function getNoteTitle(content) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  const userDataPath = await ipcRenderer.invoke('get-user-data-path');
-  notesDir = path.join(userDataPath, 'notes');
+  notesDir = await ipcRenderer.invoke('get-notes-dir');
 
   // Set initial theme
   ipcRenderer.invoke('get-current-theme').then(theme => {
