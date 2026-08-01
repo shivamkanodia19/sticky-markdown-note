@@ -20,7 +20,6 @@
   "description": "Sticky Markdown Note App",
   "dependencies": {
     "dotenv": "^16.4.5",
-    "electron-auto-launch": "^5.0.7",
     "electron-store": "^10.1.0",
     "electron-updater": "^6.6.2",
     "katex": "^0.16.9",
@@ -49,7 +48,8 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.ico"
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": false
     },
     "mac": {
       "target": [

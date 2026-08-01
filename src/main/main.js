@@ -1,5 +1,5 @@
 // main.js
-const { app, BrowserWindow, ipcMain, protocol, net } = require('electron');
+const { app, BrowserWindow, ipcMain, protocol, net, Tray, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { execSync } = require('child_process');
@@ -38,6 +38,7 @@ let store; // Declare store instance globally
 
 let mainWindow;
 let settingsWindow; // Add this line to declare settingsWindow globally
+let tray; // System tray icon, keeps the app reachable after all note windows close
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
@@ -66,6 +67,33 @@ function createMainWindow() {
   ipcMain.on('open-settings-window', () => {
     createSettingsWindow();
   });
+}
+
+function showMemoList() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createMainWindow();
+  } else {
+    mainWindow.show();
+    mainWindow.focus();
+  }
+}
+
+// Tray icon keeps the app running in the background so closing every note
+// window (and the Memo List) doesn't quit the whole app -- matches the
+// "always-on sticky notes" behavior. Lets Shivam get back in or quit for real.
+function createTray() {
+  if (tray) return;
+
+  tray = new Tray(path.join(app.getAppPath(), 'assets', 'icon.ico'));
+  tray.setToolTip('Sticky Markdown Note');
+
+  const contextMenu = Menu.buildFromTemplate([
+    { label: 'Open Memo List', click: showMemoList },
+    { type: 'separator' },
+    { label: 'Quit', click: () => app.quit() },
+  ]);
+  tray.setContextMenu(contextMenu);
+  tray.on('click', showMemoList);
 }
 
 function createNoteWindow(notePath, position = null, isNew = false) {
@@ -353,6 +381,23 @@ ipcMain.handle('get-app-path', () => {
 
 app.on('ready', async () => {
   createMainWindow();
+  createTray();
+
+  // Launch on login by default, so the app behaves like a real always-on
+  // sticky notes app instead of something that has to be started from a
+  // terminal each time. Only meaningful for an installed/packaged build --
+  // in dev mode this would register the dev Electron.exe path, which isn't
+  // useful. Uses Electron's built-in login-item API (HKCU Run key on
+  // Windows), not the unused `electron-auto-launch` dependency: that
+  // library's Windows implementation targets HKLM on x64, which a normal
+  // per-user, non-admin install cannot write to.
+  if (app.isPackaged) {
+    cleanStartup(); // remove any stale/old autostart entries first
+    const loginSettings = app.getLoginItemSettings();
+    if (!loginSettings.openAtLogin) {
+      app.setLoginItemSettings({ openAtLogin: true, path: process.execPath });
+    }
+  }
 
   // Dynamically import electron-store and initialize store instance here
   Store = (await import('electron-store')).default;
@@ -480,6 +525,14 @@ app.on('ready', async () => {
 });
 
 app.on('before-quit', writeSessionNow);
+
+// Without this listener, Electron quits the whole app the moment the last
+// window (Memo List or a note) is closed. Registering it -- without ever
+// calling app.quit() inside it -- keeps the process alive in the tray so
+// Shivam can reopen the Memo List instead of losing the app entirely.
+// Deliberate real quit still works via the tray's "Quit" item, which calls
+// app.quit() directly.
+app.on('window-all-closed', () => {});
 
 // Settings window creation function
 function createSettingsWindow() {

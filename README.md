@@ -44,6 +44,8 @@ npm start
 npm run build:win
 ```
 
+> Note: the app isn't code-signed (no certificate configured), so `win.signAndEditExecutable` is set to `false` in `package.json`. This also sidesteps an electron-builder issue where it tries to fetch a macOS code-signing helper archive even for Windows-only builds -- extracting it needs the "create symbolic link" privilege, which fails on a non-elevated/non-admin shell with "A required privilege is not held by the client." The built exe still gets the correct icon (set during packaging, not by this step); only the exe's version-string metadata and signing are skipped.
+
 ### Building for macOS
 ```bash
 # Generate DMG installer and app bundle in the `dist` folder
