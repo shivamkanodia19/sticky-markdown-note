@@ -1,10 +1,32 @@
 // note.js
 const { ipcRenderer } = require('electron');
 const { marked } = require('marked');
-const katex = require('katex');
 const fs = require('fs');
 const path = require('path');
 const CheckboxManager = require('./checkbox');
+
+// katex is heavy (the module itself plus a ~30-file font/CSS payload) and
+// most notes never contain math. Lazy-require it only the first time a note
+// actually needs it (see hasMathExpression/renderMathInMarkdown below)
+// instead of paying that cost on every single note window's startup.
+let katex = null;
+function getKatex() {
+  if (!katex) katex = require('katex');
+  return katex;
+}
+
+// Same reasoning for the KaTeX stylesheet: it's injected into <head> only
+// once a note is found to contain a math expression, instead of note.html
+// loading it unconditionally for every note.
+let katexCssInjected = false;
+function ensureKatexCss() {
+  if (katexCssInjected) return;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = '../../styles/katex.min.css';
+  document.head.appendChild(link);
+  katexCssInjected = true;
+}
 
 // Theme application function
 function applyTheme(theme) {
@@ -205,58 +227,30 @@ async function convertAppAssetLinks(content) {
 // Handle image paste
 async function handleImagePaste(event) {
   const items = event.clipboardData.items;
-  
+
   for (const item of items) {
     if (item.type.indexOf('image') === 0) {
       event.preventDefault();
-      
+
       const file = item.getAsFile();
       const buffer = await file.arrayBuffer();
       const imageBuffer = Buffer.from(buffer);
-      
-      // Generate image filename (timestamp + random string)
-      const timestamp = Date.now();
-      const random = Math.random().toString(36).substring(2, 8);
       const ext = file.type.split('/')[1];
-      const filename = `${timestamp}-${random}.${ext}`;
-      const imagePath = path.join(userImagesDir, filename);
-      
-      // Save image
-      fs.writeFileSync(imagePath, imageBuffer);
-      
-      // Create markdown image link (using file:// protocol and absolute path)
-      const absoluteImagePath = `file:///${imagePath.replace(/\\/g, '/')}`;
-      const imageMarkdown = `![${filename}](${absoluteImagePath})`;
-      
-      // Insert image link into editor
-      const editor = document.getElementById('editor');
-      const start = editor.selectionStart;
-      const end = editor.selectionEnd;
-      const text = editor.value;
-      editor.value = text.slice(0, start) + imageMarkdown + text.slice(end);
-      editor.selectionStart = editor.selectionEnd = start + imageMarkdown.length;
-      
-      // Update preview
-      const preview = document.getElementById('preview');
-      preview.innerHTML = renderMathInMarkdown(editor.value);
-      
-      // Save file
-      if (currentPath) {
-        fs.writeFile(currentPath, String(editor.value), () => {
-          // Image added, so clean up orphaned images
-          orphanedImageManager.cleanupOrphanedImages();
-        });
-        // This save path bypasses the debounced 'input' handler above (no
-        // native input event is dispatched here), so the mirror sync has to
-        // be triggered explicitly too.
-        if (chatgptTagged) {
-          ipcRenderer.send('sync-chatgpt-mirror', String(editor.value));
-        }
-      }
-      
+
+      await insertImageBuffer(imageBuffer, ext);
       break;
     }
   }
+}
+
+// Handle image insertion via the bottom toolbar's Image button (a file
+// picker, since there's no clipboard image in that flow).
+async function handleImageFilePick(file) {
+  if (!file) return;
+  const buffer = await file.arrayBuffer();
+  const imageBuffer = Buffer.from(buffer);
+  const ext = (file.type.split('/')[1]) || path.extname(file.name).slice(1) || 'png';
+  await insertImageBuffer(imageBuffer, ext);
 }
 
 marked.setOptions({
@@ -275,47 +269,111 @@ function hasMathExpression(markdown) {
 function renderMathInMarkdown(markdown) {
   // Render checkboxes
   let html = checkboxManager.renderCheckboxes(markdown);
-  
-  // Render math expressions only if they exist
+
+  // Render math expressions only if they exist. Both the katex module and
+  // its CSS are lazy-loaded right here, on first actual use, not up front.
   if (hasMathExpression(markdown)) {
+    ensureKatexCss();
+    const k = getKatex();
     html = html.replace(/\$(.+?)\$/g, (_, expr) => {
       try {
-        return katex.renderToString(expr, { throwOnError: false });
+        return k.renderToString(expr, { throwOnError: false });
       } catch (err) {
         return `<code>${expr}</code>`;
       }
     });
   }
-  
+
   return html;
 }
 
 function surround(before, after = before) {
   const editor = document.getElementById('editor');
-  const preview = document.getElementById('preview');
   const text = editor.value;
   const start = editor.selectionStart;
   const end = editor.selectionEnd;
   const selected = text.slice(start, end);
-  
+
   // Insert text at cursor position
   const newText = text.slice(0, start) + before + selected + after + text.slice(end);
   editor.value = newText;
-  
-  // Update preview
-  preview.innerHTML = renderMathInMarkdown(editor.value);
-  
+
+  // Dispatch the same 'input' event typing fires, so this goes through the
+  // normal debounced preview-render + autosave path instead of duplicating
+  // it (and instead of silently skipping the save, which direct preview
+  // writes used to do here).
+  editor.dispatchEvent(new Event('input'));
+
   // Focus editor and set cursor position
   editor.focus();
   const newPosition = start + before.length;
   editor.selectionStart = newPosition;
   editor.selectionEnd = newPosition;
-  
+
   // Force cursor position update
   setTimeout(() => {
     editor.selectionStart = newPosition;
     editor.selectionEnd = newPosition;
   }, 0);
+}
+
+// Wraps each selected line (or just inserts a bare bullet at the cursor) in
+// a Markdown list marker. Shared by the bottom toolbar's List button.
+function insertBulletList() {
+  const editor = document.getElementById('editor');
+  const text = editor.value;
+  const start = editor.selectionStart;
+  const end = editor.selectionEnd;
+  const selected = text.slice(start, end);
+
+  const bulleted = selected
+    ? selected.split('\n').map(line => '- ' + line).join('\n')
+    : '- ';
+
+  const newText = text.slice(0, start) + bulleted + text.slice(end);
+  editor.value = newText;
+  editor.dispatchEvent(new Event('input'));
+
+  editor.focus();
+  const newPosition = start + bulleted.length;
+  editor.selectionStart = editor.selectionEnd = newPosition;
+}
+
+// Shared by paste-an-image and the toolbar's Image button: writes the image
+// next to the note, inserts a Markdown image link at the cursor, and saves.
+async function insertImageBuffer(imageBuffer, ext) {
+  const editor = document.getElementById('editor');
+  const preview = document.getElementById('preview');
+
+  const timestamp = Date.now();
+  const random = Math.random().toString(36).substring(2, 8);
+  const filename = `${timestamp}-${random}.${ext}`;
+  const imagePath = path.join(userImagesDir, filename);
+
+  fs.writeFileSync(imagePath, imageBuffer);
+
+  const absoluteImagePath = `file:///${imagePath.replace(/\\/g, '/')}`;
+  const imageMarkdown = `![${filename}](${absoluteImagePath})`;
+
+  const start = editor.selectionStart;
+  const end = editor.selectionEnd;
+  const text = editor.value;
+  editor.value = text.slice(0, start) + imageMarkdown + text.slice(end);
+  editor.selectionStart = editor.selectionEnd = start + imageMarkdown.length;
+
+  preview.innerHTML = renderMathInMarkdown(editor.value);
+
+  if (currentPath) {
+    fs.writeFile(currentPath, String(editor.value), () => {
+      orphanedImageManager.cleanupOrphanedImages();
+    });
+    // This save path bypasses the debounced 'input' handler (no native
+    // input event dispatched), so the mirror sync has to be triggered
+    // explicitly too.
+    if (chatgptTagged) {
+      ipcRenderer.send('sync-chatgpt-mirror', String(editor.value));
+    }
+  }
 }
 
 // Loading indicator control functions
@@ -413,8 +471,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   // viewMode is one of 'edit' | 'preview' | 'split'. Titlebar visibility is
   // handled entirely by CSS (opacity, via the 'blurred' class below) so
   // there's no display state to set here.
-  let viewMode = 'preview';
+  //
+  // Defaults to 'split' unconditionally (new AND existing notes) so a
+  // clickable, focusable <textarea> is always on screen the moment a note
+  // opens. This used to default to 'preview' for existing notes, which put
+  // a non-editable preview div where the cursor lands -- clicking did
+  // nothing because there was no editable element under the pointer. That
+  // was the actual cause of "hard to click in", not a styling issue.
+  let viewMode = 'split';
   let saveTimeout = null;
+  let previewRenderTimeout = null;
 
   // Checkbox click event listener (event delegation)
   preview.addEventListener('change', (event) => {
@@ -424,6 +490,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   function saveSettings() {
     const settings = { fontSize: currentFontSize };
     fs.writeFile(settingsPath, JSON.stringify(settings, null, 2), () => {});
+  }
+
+  // Debounced, and skipped entirely while the preview pane isn't visible
+  // (viewMode === 'edit') -- called from the per-keystroke input handler
+  // below, where a synchronous full markdown re-parse + DOM replace on
+  // every character was the main cause of typing lag.
+  function schedulePreviewRender(text) {
+    if (viewMode === 'edit') return;
+    if (previewRenderTimeout) clearTimeout(previewRenderTimeout);
+    previewRenderTimeout = setTimeout(() => {
+      preview.innerHTML = renderMathInMarkdown(text);
+    }, 80);
   }
 
   function updateView() {
@@ -436,6 +514,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     if (viewMode === 'edit') {
       editor.focus();
+    } else {
+      // The preview may have missed renders while it was hidden in
+      // edit-only mode (schedulePreviewRender skips those). Refresh it
+      // immediately -- this is a one-off mode switch, not a per-keystroke
+      // call, so an undebounced render here is not a performance concern.
+      if (previewRenderTimeout) {
+        clearTimeout(previewRenderTimeout);
+        previewRenderTimeout = null;
+      }
+      preview.innerHTML = renderMathInMarkdown(editor.value);
     }
     document.body.classList.remove('both-mode', 'only-mode');
     document.body.classList.add(viewMode === 'split' ? 'both-mode' : 'only-mode');
@@ -461,9 +549,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   ipcRenderer.on('load-note', async (event, notePath, isNew) => {
     currentPath = notePath;
-    if (isNew) {
-      viewMode = 'split';
-    }
+    // viewMode is already 'split' by default (see declaration above) for
+    // both new and existing notes -- nothing to branch on here anymore.
 
     showLoadingIndicator(); // Show loading indicator before reading file
 
@@ -514,8 +601,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   editor.addEventListener('input', () => {
     const text = editor.value;
-    preview.innerHTML = renderMathInMarkdown(text);
-    
+    // Debounced (80ms) and skipped entirely in edit-only mode -- see
+    // schedulePreviewRender above. This used to be a synchronous full
+    // markdown re-parse + DOM replace on every keystroke, which was the
+    // main cause of typing lag, especially since it ran even when the
+    // preview pane was display:none.
+    schedulePreviewRender(text);
+
     // Auto-save (1-second debounce)
     if (currentPath) {
       if (saveTimeout) {
@@ -894,7 +986,26 @@ document.addEventListener('DOMContentLoaded', async () => {
   updateView();
 
   ipcRenderer.send('note-ready');
-  
+
   // Add image paste event listener
   editor.addEventListener('paste', handleImagePaste);
+
+  // Persistent bottom formatting toolbar (Bold/Italic/List/Image) --
+  // replaces the old edit/preview/split segmented control now that 'split'
+  // is always the default, real view (see viewMode declaration above).
+  const fmtBoldBtn = document.getElementById('fmt-bold');
+  const fmtItalicBtn = document.getElementById('fmt-italic');
+  const fmtListBtn = document.getElementById('fmt-list');
+  const fmtImageBtn = document.getElementById('fmt-image');
+  const imageFileInput = document.getElementById('image-file-input');
+
+  fmtBoldBtn?.addEventListener('click', () => surround('**'));
+  fmtItalicBtn?.addEventListener('click', () => surround('*'));
+  fmtListBtn?.addEventListener('click', () => insertBulletList());
+  fmtImageBtn?.addEventListener('click', () => imageFileInput?.click());
+  imageFileInput?.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    imageFileInput.value = ''; // allow picking the same file again later
+    await handleImageFilePick(file);
+  });
 });

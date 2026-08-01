@@ -23,6 +23,7 @@ body {
     line-height: 1.6;
     padding: var(--space-4);
     padding-top: var(--titlebar-height);
+    padding-bottom: var(--toolbar-height);
     resize: none;
     background-color: var(--surface);
     color: var(--text-primary);
@@ -32,6 +33,7 @@ body {
 #preview {
     padding: var(--space-5);
     padding-top: var(--titlebar-height);
+    padding-bottom: var(--toolbar-height);
     overflow-y: auto;
     box-sizing: border-box;
     background-color: var(--bg);
@@ -197,20 +199,31 @@ body.only-mode #preview {
   color: #FFFFFF !important;
 }
 
-/* View mode segmented control (Edit / Preview / Split) */
-.view-toggle-group {
-  -webkit-app-region: no-drag;
+/* Persistent bottom formatting toolbar (Bold/Italic/List/Image). Always
+   visible whenever a note is focused -- a docked bar, not a floating
+   selection-triggered popup, so it doesn't require selecting text first.
+   position:absolute (not fixed) for the same rounded-corner-clipping reason
+   documented on #titlebar above. */
+#bottom-toolbar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--toolbar-height);
   display: flex;
-  gap: 2px;
-  background: var(--hover);
-  border-radius: var(--radius-sm);
-  padding: 2px;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  background-color: var(--titlebar-bg);
+  border-top: 1px solid var(--border);
+  z-index: 99;
+  -webkit-app-region: no-drag;
 }
 
-.seg-btn {
+.tool-btn {
   -webkit-app-region: no-drag;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   padding: 0;
   display: inline-flex;
   align-items: center;
@@ -220,24 +233,30 @@ body.only-mode #preview {
   border: none;
   border-radius: var(--radius-sm);
   cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
-.seg-btn:hover {
-  background: var(--surface);
+.tool-btn:hover {
+  background: var(--hover);
   color: var(--text-primary);
-}
-
-.seg-btn.active {
-  background: var(--accent-soft);
-  color: var(--accent);
 }
 
 /* Titlebar: floats over the editor/preview content (the panes' padding-top
    reserves space for it) so it can recede on blur without a layout shift.
    Colors/height/button styles come from the shared #titlebar rules in
-   common.css -- this only adds the note-window-specific overlay + fade. */
+   common.css -- this only adds the note-window-specific overlay + fade.
+
+   position:absolute, not fixed: this window's body has overflow:hidden +
+   border-radius (common.css) for real rounded corners, but position:fixed
+   is anchored to the viewport and is NOT clipped by an ancestor's
+   overflow:hidden -- a fixed titlebar paints edge-to-edge and opaquely
+   covers the rounded corners regardless of body's radius. absolute, with
+   body as its containing block (common.css sets body's own
+   position:relative), gets the identical "floats over the content" visual
+   result here (body has no scroll and exactly fills the window) while
+   actually respecting body's clip. */
 #titlebar {
-  position: fixed;
+  position: absolute;
   top: 0;
   left: 0;
   right: 0;
@@ -250,9 +269,13 @@ body.only-mode #preview {
   pointer-events: none;
 }
 
-/* Loading Indicator Styles */
+/* Loading Indicator Styles.
+   position:absolute (not fixed) for the same rounded-corner-clipping reason
+   documented on #titlebar above -- this one only shows briefly while a note
+   loads, but while visible it's a full window-sized overlay and would
+   otherwise square off the corners just like the titlebar did. */
 #loading-indicator {
-    position: fixed;
+    position: absolute;
     top: 0;
     left: 0;
     width: 100%;

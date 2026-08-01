@@ -32,6 +32,8 @@
     --radius: 8px;
     --radius-sm: 6px;
     --titlebar-height: 36px;
+    /* Note window's persistent bottom formatting toolbar (see note.css) */
+    --toolbar-height: 40px;
 }
 
 /* Dark mode variable override */
@@ -54,7 +56,21 @@ body.dark-mode {
     --accent-button-text: #FFFFFF;
 }
 
-/* Base styles */
+/* Base styles.
+   Real rounded window corners were attempted here (transparent:true on every
+   BrowserWindow in main.js + border-radius/overflow:hidden on body, with
+   html left transparent so the corner pixels outside body's rounded rect
+   would show the desktop through them) and then REVERTED after verifying,
+   with real DPI-calibrated desktop screenshots and pixel sampling -- not
+   just visual inspection -- that the corners rendered fully opaque anyway on
+   this Windows/Electron combination (a real, documented Electron issue on
+   Windows 11: transparent frameless windows don't reliably get rounded
+   corners the way macOS's `roundedCorners` option does). transparent:true
+   has a real compositing cost (continuous alpha-blending against the
+   desktop) with zero visual payoff if it doesn't actually round anything, so
+   it was not worth keeping for a cosmetic effect that doesn't render --
+   especially not in the same pass as fixing "slow". Revisit with Electron's
+   newer Windows-specific corner APIs if this matters enough later. */
 html {
     background-color: var(--bg);
 }
@@ -69,6 +85,14 @@ body {
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
+    /* Containing block for position:absolute descendants -- specifically
+       note.css's #titlebar/#bottom-toolbar/#loading-indicator, which use
+       absolute (not fixed) so they're correctly clipped by an ancestor's
+       overflow:hidden if rounded corners are ever revisited. Harmless and
+       correct regardless of that -- absolute with top/left/right:0 against
+       a non-scrolling, viewport-filling body behaves identically to fixed
+       here either way. */
+    position: relative;
 }
 
 /* Titlebar styles -- shared shell for List / Note / Settings windows.
