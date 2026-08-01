@@ -115,8 +115,13 @@ function createNoteWindow(notePath, position = null, isNew = false) {
     }
   }
 
-  // Load previous position/size
+  // Load previous position/size/pin state
   const savedBounds = loadWindowState(fullPath);
+
+  // Pin ("always on top") defaults to true: the whole point of this app is
+  // behaving like a real sticky note that stays visible, so a note only
+  // stops being pinned if Shivam explicitly un-pins it (recorded below).
+  const pinned = savedBounds?.pinned !== undefined ? savedBounds.pinned : true;
 
   // Create new window
   const win = new BrowserWindow({
@@ -124,6 +129,7 @@ function createNoteWindow(notePath, position = null, isNew = false) {
     height: savedBounds?.height || 400,
     x: position?.x ?? savedBounds?.x,
     y: position?.y ?? savedBounds?.y,
+    alwaysOnTop: pinned,
     frame: false,
     show: false, // Start hidden
     webPreferences: {
@@ -223,7 +229,11 @@ function loadWindowState(notePath) {
   }
 }
 
-function saveWindowState(notePath, bounds) {
+// Merges `updates` (bounds and/or pinned) into the existing record for this
+// note instead of overwriting it, so saving new bounds doesn't wipe out a
+// previously saved pin state (and vice versa) -- they're written by
+// different event handlers at different times.
+function saveWindowState(notePath, updates) {
   const fullPath = path.resolve(notePath);
   let data = {};
   if (fs.existsSync(stateFilePath)) {
@@ -233,7 +243,7 @@ function saveWindowState(notePath, bounds) {
       data = {};
     }
   }
-  data[fullPath] = bounds;
+  data[fullPath] = { ...(data[fullPath] || {}), ...updates };
   fs.writeFileSync(stateFilePath, JSON.stringify(data, null, 2));
 }
 
@@ -332,6 +342,16 @@ ipcMain.on('create-new-note-nearby', event => {
 
 ipcMain.on('delete-note', (event, noteFile) => {
   const fullPath = path.resolve(path.join(notesDir, noteFile));
+
+  // Close the window (if open) BEFORE wiping its state entry. win.close()
+  // synchronously fires the 'close' listener, which calls saveWindowState
+  // and would otherwise re-write a fresh bounds-only record for fullPath
+  // right after we deleted it, leaving a stale orphaned entry behind for
+  // every deleted note.
+  if (openNoteWindows[fullPath]) {
+    openNoteWindows[fullPath].close(); // Automatically cleaned up in 'closed' event
+  }
+
   const stateDataPath = path.join(app.getPath('userData'), 'note-window-state.json');
   if (fs.existsSync(stateDataPath)) {
     try {
@@ -346,11 +366,6 @@ ipcMain.on('delete-note', (event, noteFile) => {
   // Delete file
   if (fs.existsSync(fullPath)) {
     fs.unlinkSync(fullPath);
-  }
-
-  // Close window if it's open
-  if (openNoteWindows[fullPath]) {
-    openNoteWindows[fullPath].close(); // Automatically cleaned up in 'closed' event
   }
 
   // Refresh list
@@ -377,6 +392,29 @@ ipcMain.handle('get-notes-dir', () => {
 
 ipcMain.handle('get-app-path', () => {
   return app.getAppPath();
+});
+
+// Pin ("always on top") toggle for the calling note window specifically --
+// mirrors the get-notes-dir/get-app-path pattern of resolving state from
+// the sender's own BrowserWindow rather than trusting an argument.
+ipcMain.handle('toggle-pin', event => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return false;
+
+  const newState = !win.isAlwaysOnTop();
+  win.setAlwaysOnTop(newState);
+
+  if (win.notePath) {
+    saveWindowState(win.notePath, { pinned: newState });
+  }
+
+  return newState;
+});
+
+ipcMain.handle('get-pin-state', event => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return false;
+  return win.isAlwaysOnTop();
 });
 
 app.on('ready', async () => {

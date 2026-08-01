@@ -353,6 +353,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   const viewToggleBtn = document.getElementById('view-toggle');
   const onlyToggleBtn = document.getElementById('only-toggle');
   const newNoteBtn = document.getElementById('new-note');
+  const pinToggleBtn = document.getElementById('pin-toggle');
+
+  // Reflect actual window state (set by main.js at creation time, defaulting
+  // to pinned) rather than assuming -- keeps the button honest even if main
+  // process logic changes.
+  function applyPinState(pinned) {
+    if (!pinToggleBtn) return;
+    pinToggleBtn.classList.toggle('pinned', pinned);
+    pinToggleBtn.title = pinned
+      ? 'Pinned: note stays on top (click to unpin)'
+      : 'Not pinned (click to keep on top)';
+  }
+
+  ipcRenderer.invoke('get-pin-state').then(applyPinState);
+
+  pinToggleBtn?.addEventListener('click', async () => {
+    const newState = await ipcRenderer.invoke('toggle-pin');
+    applyPinState(newState);
+  });
 
   // Set initial titlebar state
   if (titlebar) {

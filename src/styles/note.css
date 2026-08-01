@@ -149,6 +149,20 @@ body.only-mode #preview {
   cursor: text;
 }
 
+/* Pin toggle button: dim/greyscale when unpinned, full-color highlight when pinned
+   so pinned state is visible at a glance without reading text. Selectors need to
+   match/beat #titlebar .title-btn's `opacity: 1 !important` from common.css. */
+#titlebar .title-btn#pin-toggle {
+  opacity: 0.45 !important;
+  filter: grayscale(1);
+}
+
+#titlebar .title-btn#pin-toggle.pinned {
+  opacity: 1 !important;
+  filter: none;
+  background-color: var(--accent-color) !important;
+}
+
 /* Titlebar specific styles for note window */
 #titlebar {
   position: fixed;
