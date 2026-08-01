@@ -1,5 +1,5 @@
 // note.js
-const { ipcRenderer } = require('electron');
+const { ipcRenderer, clipboard } = require('electron');
 const { marked } = require('marked');
 const fs = require('fs');
 const path = require('path');
@@ -411,105 +411,105 @@ async function insertImageBuffer(imageBuffer, ext) {
   }
 }
 
-// Screenshot capture (Item 2). v1 scope, deliberately: desktopCapturer lists
-// real screens/windows, the user picks one from a thumbnail grid (built in
-// showScreenshotPicker, wired up in DOMContentLoaded below), and the FULL
-// chosen source is captured -- no drag-to-select-region crop tool. That's
-// the explicitly-sanctioned v1 shape rather than a half-built crop overlay.
-// Whatever comes out feeds into the exact same insertImageBuffer() used by
-// paste-image and the toolbar's Image button, not a second image pipeline.
-let screenshotPickerResolve = null;
+// Screenshot capture (v2 rework): triggers Windows' own native region-select
+// snip overlay (the same UI as Win+Shift+S -- see main.js's
+// 'trigger-native-snip' handler for which underlying mechanism launches it
+// and why) instead of the old in-app desktopCapturer thumbnail picker.
+//
+// There's no "snip completed" event to subscribe to: the OS just copies the
+// captured region to the clipboard once the user finishes dragging a
+// selection, full stop. So completion is detected by polling
+// clipboard.readImage() for a NEW image (compared against whatever was
+// already on the clipboard before the snip was triggered, so a pre-existing
+// clipboard image isn't mistaken for the capture) until one shows up, a
+// timeout elapses, or the user cancels. Whatever's detected feeds into the
+// exact same insertImageBuffer() used by paste-image and the toolbar's Image
+// button -- not a second image pipeline.
+const SNIP_POLL_INTERVAL_MS = 400;
+const SNIP_TIMEOUT_MS = 90000; // generous -- the user may take a while to drag-select
 
-function showScreenshotPicker(sources) {
-  const picker = document.getElementById('screenshot-picker');
-  const grid = document.getElementById('screenshot-sources');
-  const cancelBtn = document.getElementById('screenshot-cancel');
-  grid.innerHTML = '';
+let snipPollTimer = null;
+let snipTimeoutTimer = null;
 
-  sources.forEach(source => {
-    const item = document.createElement('div');
-    item.className = 'source-item';
-    const img = document.createElement('img');
-    img.src = source.thumbnailDataUrl;
-    const name = document.createElement('div');
-    name.className = 'source-name';
-    name.textContent = source.name || source.id;
-    item.appendChild(img);
-    item.appendChild(name);
-    item.addEventListener('click', () => {
-      picker.classList.add('hidden');
-      if (screenshotPickerResolve) screenshotPickerResolve(source);
-      screenshotPickerResolve = null;
-    });
-    grid.appendChild(item);
-  });
+function isSnipPending() {
+  return snipPollTimer !== null;
+}
 
-  picker.classList.remove('hidden');
-
-  return new Promise(resolve => {
-    screenshotPickerResolve = resolve;
-    cancelBtn.onclick = () => {
-      picker.classList.add('hidden');
-      if (screenshotPickerResolve) screenshotPickerResolve(null);
-      screenshotPickerResolve = null;
-    };
-  });
+// Clears both timers and restores the button to its idle look/title. Safe to
+// call redundantly (timeout, detection, cancel-click, and window teardown
+// all funnel through this).
+function stopSnipPolling() {
+  if (snipPollTimer) {
+    clearInterval(snipPollTimer);
+    snipPollTimer = null;
+  }
+  if (snipTimeoutTimer) {
+    clearTimeout(snipTimeoutTimer);
+    snipTimeoutTimer = null;
+  }
+  const screenshotBtn = document.getElementById('screenshot-btn');
+  if (screenshotBtn) {
+    screenshotBtn.classList.remove('pending');
+    screenshotBtn.title = 'Screenshot';
+  }
 }
 
 async function captureScreenshot() {
-  let sources;
-  try {
-    // desktopCapturer itself is main-process-only (see main.js's
-    // 'get-screenshot-sources' handler) -- it isn't reachable directly from
-    // this renderer even with nodeIntegration on.
-    sources = await ipcRenderer.invoke('get-screenshot-sources');
-  } catch (err) {
-    console.error('get-screenshot-sources failed:', err);
+  const screenshotBtn = document.getElementById('screenshot-btn');
+
+  // Clicking Screenshot again while a snip is already pending cancels it --
+  // same "click to toggle off" language the pin/ChatGPT-mirror buttons use.
+  if (isSnipPending()) {
+    stopSnipPolling();
     return;
   }
-  if (!sources || !sources.length) return;
 
-  const chosen = await showScreenshotPicker(sources);
-  if (!chosen) return;
-
-  let stream;
+  let result;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: {
-        mandatory: {
-          chromeMediaSource: 'desktop',
-          chromeMediaSourceId: chosen.id,
-          maxWidth: 8000,
-          maxHeight: 8000,
-        },
-      },
+    result = await ipcRenderer.invoke('trigger-native-snip');
+  } catch (err) {
+    console.error('trigger-native-snip failed:', err);
+    return;
+  }
+  if (!result || !result.ok) {
+    console.error('Could not launch the native snip overlay:', result && result.error);
+    return;
+  }
+
+  // Baseline the clipboard's current image (if any) before the overlay
+  // opens, so an unrelated image already sitting there doesn't false-
+  // positive as "the capture" the moment polling starts.
+  const before = clipboard.readImage();
+  const beforePng = before.isEmpty() ? null : before.toPNG();
+
+  if (screenshotBtn) {
+    screenshotBtn.classList.add('pending');
+    screenshotBtn.title = 'Waiting for snip... (click to cancel)';
+  }
+
+  snipPollTimer = setInterval(() => {
+    const current = clipboard.readImage();
+    if (current.isEmpty()) return; // nothing captured yet, keep waiting
+    const currentPng = current.toPNG();
+    if (beforePng && currentPng.equals(beforePng)) return; // unchanged, keep waiting
+
+    stopSnipPolling();
+    insertImageBuffer(currentPng, 'png').catch(err => {
+      console.error('Failed to insert captured snip:', err);
     });
-  } catch (err) {
-    console.error('getUserMedia capture failed:', err);
-    return;
-  }
+  }, SNIP_POLL_INTERVAL_MS);
 
-  const video = document.createElement('video');
-  video.srcObject = stream;
-  await video.play();
-  // Let at least one real frame land before grabbing it.
-  await new Promise(r => setTimeout(r, 200));
-
-  const canvas = document.createElement('canvas');
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  canvas.getContext('2d').drawImage(video, 0, 0);
-
-  stream.getTracks().forEach(track => track.stop());
-
-  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-  if (!blob) return;
-  const arrayBuffer = await blob.arrayBuffer();
-  const imageBuffer = Buffer.from(arrayBuffer);
-
-  await insertImageBuffer(imageBuffer, 'png');
+  snipTimeoutTimer = setTimeout(() => {
+    console.log('Snip capture timed out waiting for a clipboard image (cancelled or took too long).');
+    stopSnipPolling();
+  }, SNIP_TIMEOUT_MS);
 }
+
+// Belt-and-suspenders cleanup: the timers above are scoped to this render
+// process, so closing the note window already tears them down for free, but
+// this makes the "stop polling when the note window closes" requirement
+// explicit rather than incidental.
+window.addEventListener('beforeunload', stopSnipPolling);
 
 // Loading indicator control functions
 function showLoadingIndicator() {

@@ -1,8 +1,8 @@
 // main.js
-const { app, BrowserWindow, ipcMain, protocol, net, Tray, Menu, globalShortcut, desktopCapturer } = require('electron');
+const { app, BrowserWindow, ipcMain, protocol, net, Tray, Menu, globalShortcut, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { execSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
 const { autoUpdater } = require('electron-updater');
 const { dialog, nativeTheme } = require('electron');
 
@@ -657,27 +657,85 @@ ipcMain.handle('get-note-colors', () => {
   return colors;
 });
 
-// Screenshot capture (Item 2), source-listing half. desktopCapturer.getSources
-// is main-process-only as of modern Electron -- calling it directly from the
-// renderer (even with nodeIntegration:true/contextIsolation:false, which
-// makes plenty of other Node/Electron APIs directly reachable there) throws
-// "Cannot read properties of undefined (reading 'getSources')" because the
-// `desktopCapturer` property itself isn't exposed on the renderer's
-// `electron` module at all anymore. Thumbnails are serialized to data URLs
-// here since a NativeImage instance can't cross the IPC boundary as-is.
-// The actual pixel capture (getUserMedia against the chosen source's id)
-// still happens in the renderer -- that part IS a renderer/web API.
-ipcMain.handle('get-screenshot-sources', async () => {
-  const sources = await desktopCapturer.getSources({
-    types: ['screen', 'window'],
-    thumbnailSize: { width: 300, height: 200 },
+// Screenshot capture (v2 rework): launches Windows' own native region-select
+// snip overlay (the Win+Shift+S experience) instead of the old in-app
+// desktopCapturer picker. Researched both candidate mechanisms before
+// picking one -- see notes below, this isn't the historically-assumed
+// default:
+//
+// - `shell.openExternal('ms-screenclip:')`, the URI historically documented
+//   for this, is NOT reliable here. Microsoft replaced the legacy
+//   `ms-screenclip:` scheme on 2025-05-01 with a structured protocol
+//   (learn.microsoft.com/windows/apps/develop/launch/launch-snipping-tool)
+//   that (a) requires a mode parameter (rectangle/freeform/window) on the
+//   capture/image path -- a bare `ms-screenclip:` with no path is no longer
+//   a valid request -- and (b) requires a `redirect-uri`, whose response
+//   delivery is explicitly gated on the caller being a packaged MSIX app:
+//   "Unpackaged (Win32) callers cannot receive responses via redirect-uri.
+//   If an unpackaged app provides a redirect-uri, Snipping Tool will not
+//   deliver the response and may exit without showing the capture UI." This
+//   Electron app is unpackaged (NSIS installer, not MSIX), so it can't use
+//   the supported path at all, and real-world reports (see "You'll need a
+//   new app to open this ms-screenclip link") confirm the old bare-URI
+//   shortcut is now unreliable in practice too.
+// - `SnippingTool.exe /clip` (undocumented but long-standing) launches
+//   straight into rectangle-select capture mode via a plain process launch,
+//   not protocol activation -- no app identity/MSIX requirement, because
+//   there's no redirect-uri round-trip involved at all. The legacy stub
+//   still lives in System32 and forwards to the modern Snip & Sketch capture
+//   UI. This is what's actually shipped as the primary mechanism, with the
+//   URI scheme kept as a fallback only for the (unlikely) case Windows drops
+//   the legacy stub entirely.
+//
+// Either way, there is no "snip completed" event to subscribe to -- the OS
+// copies the captured region to the clipboard when the user finishes
+// selecting, full stop. Detecting that is the renderer's job (note.js polls
+// clipboard.readImage()); this handler only has to get the overlay open.
+ipcMain.handle('trigger-native-snip', () => {
+  return new Promise(resolve => {
+    let settled = false;
+    let child;
+    try {
+      // Deliberately NOT shell:true: with a shell wrapping the call, the
+      // 'spawn' event below would fire as soon as cmd.exe itself starts
+      // (which always succeeds), masking a missing/renamed SnippingTool.exe
+      // instead of surfacing it as an 'error' event. Without a shell,
+      // Windows' CreateProcess still resolves a bare executable name via
+      // System32/PATH on its own, so this doesn't need a hardcoded path.
+      child = spawn('SnippingTool.exe', ['/clip'], { stdio: 'ignore' });
+    } catch (err) {
+      resolve(fallbackToScreenClipUri(err));
+      return;
+    }
+
+    child.once('error', err => {
+      if (settled) return;
+      settled = true;
+      resolve(fallbackToScreenClipUri(err));
+    });
+
+    // Node's ChildProcess emits 'spawn' once the OS has actually started the
+    // process (Node 15+) -- a real success signal, not a guess/timeout.
+    child.once('spawn', () => {
+      if (settled) return;
+      settled = true;
+      child.unref();
+      resolve({ ok: true, method: 'snippingtool-clip' });
+    });
   });
-  return sources.map(s => ({
-    id: s.id,
-    name: s.name,
-    thumbnailDataUrl: s.thumbnail.toDataURL(),
-  }));
 });
+
+function fallbackToScreenClipUri(primaryErr) {
+  console.error('SnippingTool.exe /clip failed, falling back to ms-screenclip: URI:', primaryErr);
+  try {
+    // Best-effort only -- see the block comment above for why this is not
+    // expected to reliably show the capture UI from an unpackaged app.
+    shell.openExternal('ms-screenclip:');
+    return { ok: true, method: 'ms-screenclip-fallback', warning: String(primaryErr && primaryErr.message || primaryErr) };
+  } catch (fallbackErr) {
+    return { ok: false, error: String(fallbackErr && fallbackErr.message || fallbackErr) };
+  }
+}
 
 // "Export as PDF" -- printToPDF and the save dialog are both main-process-
 // only APIs (webContents.printToPDF, dialog.showSaveDialog), so this has to
