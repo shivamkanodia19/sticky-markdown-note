@@ -1,10 +1,16 @@
 // main.js
-const { app, BrowserWindow, ipcMain, protocol, net, Tray, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, protocol, net, Tray, Menu, globalShortcut, desktopCapturer } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { execSync } = require('child_process');
 const { autoUpdater } = require('electron-updater');
 const { dialog, nativeTheme } = require('electron');
+
+// The 7-swatch palette real Sticky Notes ships (see common.css --swatch-*
+// for the actual hex values). Kept as an allowlist here so a malformed/stale
+// IPC call can't ever write an arbitrary string into the state file.
+const NOTE_COLORS = ['yellow', 'green', 'blue', 'purple', 'pink', 'gray', 'charcoal'];
+const DEFAULT_NOTE_COLOR = 'yellow';
 
 app.setAppUserModelId('com.hsmin.stickymarkdownnote');
 
@@ -268,6 +274,12 @@ function createNoteWindow(notePath, position = null, isNew = false) {
   win.chatgptTagged = savedBounds?.destinations?.chatgpt !== undefined
     ? !!savedBounds.destinations.chatgpt
     : !!isNew;
+
+  // Per-note color, same cached-on-window-instance pattern as chatgptTagged
+  // above. Every note (new or pre-existing, tagged or not) gets a real
+  // color rather than staying colorless -- defaults to yellow, matching
+  // real Sticky Notes' own default.
+  win.noteColor = NOTE_COLORS.includes(savedBounds?.color) ? savedBounds.color : DEFAULT_NOTE_COLOR;
 
   win.on('focus', () => {
     win.webContents.send('window-focused');
@@ -595,6 +607,109 @@ ipcMain.handle('get-destinations', event => {
   return { chatgpt: !!win.chatgptTagged };
 });
 
+// Per-note color swatch -- same fromWebContents + saveWindowState pattern as
+// toggle-pin. Unlike toggle-pin/toggle-chatgpt-destination (both booleans
+// that just flip), this sets one of 7 explicit values, so the handler name
+// and shape differ (set-note-color, not toggle-note-color) but the
+// persistence mechanism is identical.
+ipcMain.handle('set-note-color', (event, color) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed() || !win.notePath) return win?.noteColor || DEFAULT_NOTE_COLOR;
+  if (!NOTE_COLORS.includes(color)) return win.noteColor || DEFAULT_NOTE_COLOR;
+
+  win.noteColor = color;
+  saveWindowState(win.notePath, { color });
+
+  // The list window shows a color dot per note (read from disk, not from
+  // this window's in-memory state), so it needs a nudge to pick up the change.
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+    mainWindow.webContents.send('refresh-list');
+  }
+
+  return color;
+});
+
+ipcMain.handle('get-note-color', event => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return DEFAULT_NOTE_COLOR;
+  return win.noteColor || DEFAULT_NOTE_COLOR;
+});
+
+// Bulk color lookup for the list window, which needs every note's color
+// (not just one window's) to render its per-row dot -- reads the state file
+// directly rather than going through any open BrowserWindow, since most
+// listed notes have no open window at all.
+ipcMain.handle('get-note-colors', () => {
+  let data = {};
+  if (fs.existsSync(stateFilePath)) {
+    try {
+      data = JSON.parse(fs.readFileSync(stateFilePath, 'utf-8'));
+    } catch {
+      data = {};
+    }
+  }
+  const colors = {};
+  for (const [fullPath, entry] of Object.entries(data)) {
+    if (entry && NOTE_COLORS.includes(entry.color)) {
+      colors[fullPath] = entry.color;
+    }
+  }
+  return colors;
+});
+
+// Screenshot capture (Item 2), source-listing half. desktopCapturer.getSources
+// is main-process-only as of modern Electron -- calling it directly from the
+// renderer (even with nodeIntegration:true/contextIsolation:false, which
+// makes plenty of other Node/Electron APIs directly reachable there) throws
+// "Cannot read properties of undefined (reading 'getSources')" because the
+// `desktopCapturer` property itself isn't exposed on the renderer's
+// `electron` module at all anymore. Thumbnails are serialized to data URLs
+// here since a NativeImage instance can't cross the IPC boundary as-is.
+// The actual pixel capture (getUserMedia against the chosen source's id)
+// still happens in the renderer -- that part IS a renderer/web API.
+ipcMain.handle('get-screenshot-sources', async () => {
+  const sources = await desktopCapturer.getSources({
+    types: ['screen', 'window'],
+    thumbnailSize: { width: 300, height: 200 },
+  });
+  return sources.map(s => ({
+    id: s.id,
+    name: s.name,
+    thumbnailDataUrl: s.thumbnail.toDataURL(),
+  }));
+});
+
+// "Export as PDF" -- printToPDF and the save dialog are both main-process-
+// only APIs (webContents.printToPDF, dialog.showSaveDialog), so this has to
+// be an invoke handler rather than something the renderer can do directly
+// the way it does clipboard.writeText for "Copy Note". note.css's @media
+// print rules hide the titlebar/toolbar/editor so the PDF captures only the
+// rendered preview, not the raw chrome of the note window.
+ipcMain.handle('export-note-pdf', async event => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return { ok: false, error: 'no window' };
+
+  const defaultName = win.notePath
+    ? `${path.basename(win.notePath, '.md')}.pdf`
+    : 'note.pdf';
+
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    title: 'Export as PDF',
+    defaultPath: path.join(app.getPath('documents'), defaultName),
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+
+  try {
+    const pdfBuffer = await win.webContents.printToPDF({});
+    await fs.promises.writeFile(filePath, pdfBuffer);
+    return { ok: true, filePath };
+  } catch (e) {
+    console.error('Export PDF failed:', e);
+    return { ok: false, error: String(e) };
+  }
+});
+
 // Fire-and-forget mirror sync, called from the renderer's existing autosave
 // path right after it writes the primary file. Guarded by the cached
 // win.chatgptTagged flag so untagged notes never touch Drive.
@@ -677,6 +792,24 @@ app.on('ready', async () => {
   createMainWindow();
   createTray();
 
+  // Global "new note" hotkey -- registered once here at startup (not
+  // per-window) and unregistered in the 'will-quit' handler below, per
+  // Electron's own globalShortcut docs: a shortcut registered with
+  // globalShortcut.register keeps working system-wide, even while the app
+  // has no focused window, until it's explicitly unregistered -- it does
+  // NOT auto-clear on its own, so skipping the will-quit unregister would
+  // leave Ctrl+Alt+N dead-bound to this app (or erroring) after quit until
+  // next reboot. Ctrl+Alt+N: chosen to avoid the common collisions Ctrl+N
+  // (new-note-in-app shortcuts almost everywhere) and Ctrl+Shift+N
+  // (new incognito window in every Chromium browser) would both hit.
+  const NEW_NOTE_HOTKEY = 'Control+Alt+N';
+  const hotkeyRegistered = globalShortcut.register(NEW_NOTE_HOTKEY, () => {
+    createNewNote();
+  });
+  if (!hotkeyRegistered) {
+    console.warn('Failed to register global shortcut', NEW_NOTE_HOTKEY, '-- likely already claimed by another app.');
+  }
+
   // Launch on login by default, so the app behaves like a real always-on
   // sticky notes app instead of something that has to be started from a
   // terminal each time. Only meaningful for an installed/packaged build --
@@ -758,6 +891,13 @@ app.on('ready', async () => {
 });
 
 app.on('before-quit', writeSessionNow);
+
+// Unregisters the global "new note" hotkey registered in app.on('ready')
+// above. Required -- globalShortcut bindings otherwise persist at the OS
+// level past this process's lifetime.
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+});
 
 // Without this listener, Electron quits the whole app the moment the last
 // window (Memo List or a note) is closed. Registering it -- without ever
