@@ -339,6 +339,30 @@ function insertBulletList() {
   editor.selectionStart = editor.selectionEnd = newPosition;
 }
 
+// Same shape as insertBulletList above, but with the GFM task-list marker
+// ('- [ ] ' instead of '- ') -- checkbox.js's marked renderer already
+// understands this syntax and renders/toggles it; this was purely a missing
+// UI trigger for it (Item 3).
+function insertChecklist() {
+  const editor = document.getElementById('editor');
+  const text = editor.value;
+  const start = editor.selectionStart;
+  const end = editor.selectionEnd;
+  const selected = text.slice(start, end);
+
+  const checklisted = selected
+    ? selected.split('\n').map(line => '- [ ] ' + line).join('\n')
+    : '- [ ] ';
+
+  const newText = text.slice(0, start) + checklisted + text.slice(end);
+  editor.value = newText;
+  editor.dispatchEvent(new Event('input'));
+
+  editor.focus();
+  const newPosition = start + checklisted.length;
+  editor.selectionStart = editor.selectionEnd = newPosition;
+}
+
 // Shared by paste-an-image and the toolbar's Image button: writes the image
 // next to the note, inserts a Markdown image link at the cursor, and saves.
 async function insertImageBuffer(imageBuffer, ext) {
@@ -352,7 +376,18 @@ async function insertImageBuffer(imageBuffer, ext) {
 
   fs.writeFileSync(imagePath, imageBuffer);
 
-  const absoluteImagePath = `file:///${imagePath.replace(/\\/g, '/')}`;
+  // Pre-existing bug fixed in passing (not one of the 7 items, but Item 2's
+  // screenshot feature goes through this exact function, so it inherited
+  // the bug): the notes directory itself contains a space
+  // ("C:\Users\shiva\Sticky Notes"), and this path was never encoded before
+  // being embedded in the Markdown image link. CommonMark requires a bare
+  // (non-angle-bracket) link/image destination to contain no raw spaces --
+  // marked correctly refuses to parse it as an image and renders the literal
+  // "![...](...)" text instead. encodePathSpecialChars is already defined
+  // above for exactly this class of character (used when matching existing
+  // image links for orphan cleanup); reusing it here means every image
+  // link this app writes going forward actually renders.
+  const absoluteImagePath = `file:///${encodePathSpecialChars(imagePath.replace(/\\/g, '/'))}`;
   const imageMarkdown = `![${filename}](${absoluteImagePath})`;
 
   const start = editor.selectionStart;
@@ -374,6 +409,106 @@ async function insertImageBuffer(imageBuffer, ext) {
       ipcRenderer.send('sync-chatgpt-mirror', String(editor.value));
     }
   }
+}
+
+// Screenshot capture (Item 2). v1 scope, deliberately: desktopCapturer lists
+// real screens/windows, the user picks one from a thumbnail grid (built in
+// showScreenshotPicker, wired up in DOMContentLoaded below), and the FULL
+// chosen source is captured -- no drag-to-select-region crop tool. That's
+// the explicitly-sanctioned v1 shape rather than a half-built crop overlay.
+// Whatever comes out feeds into the exact same insertImageBuffer() used by
+// paste-image and the toolbar's Image button, not a second image pipeline.
+let screenshotPickerResolve = null;
+
+function showScreenshotPicker(sources) {
+  const picker = document.getElementById('screenshot-picker');
+  const grid = document.getElementById('screenshot-sources');
+  const cancelBtn = document.getElementById('screenshot-cancel');
+  grid.innerHTML = '';
+
+  sources.forEach(source => {
+    const item = document.createElement('div');
+    item.className = 'source-item';
+    const img = document.createElement('img');
+    img.src = source.thumbnailDataUrl;
+    const name = document.createElement('div');
+    name.className = 'source-name';
+    name.textContent = source.name || source.id;
+    item.appendChild(img);
+    item.appendChild(name);
+    item.addEventListener('click', () => {
+      picker.classList.add('hidden');
+      if (screenshotPickerResolve) screenshotPickerResolve(source);
+      screenshotPickerResolve = null;
+    });
+    grid.appendChild(item);
+  });
+
+  picker.classList.remove('hidden');
+
+  return new Promise(resolve => {
+    screenshotPickerResolve = resolve;
+    cancelBtn.onclick = () => {
+      picker.classList.add('hidden');
+      if (screenshotPickerResolve) screenshotPickerResolve(null);
+      screenshotPickerResolve = null;
+    };
+  });
+}
+
+async function captureScreenshot() {
+  let sources;
+  try {
+    // desktopCapturer itself is main-process-only (see main.js's
+    // 'get-screenshot-sources' handler) -- it isn't reachable directly from
+    // this renderer even with nodeIntegration on.
+    sources = await ipcRenderer.invoke('get-screenshot-sources');
+  } catch (err) {
+    console.error('get-screenshot-sources failed:', err);
+    return;
+  }
+  if (!sources || !sources.length) return;
+
+  const chosen = await showScreenshotPicker(sources);
+  if (!chosen) return;
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        mandatory: {
+          chromeMediaSource: 'desktop',
+          chromeMediaSourceId: chosen.id,
+          maxWidth: 8000,
+          maxHeight: 8000,
+        },
+      },
+    });
+  } catch (err) {
+    console.error('getUserMedia capture failed:', err);
+    return;
+  }
+
+  const video = document.createElement('video');
+  video.srcObject = stream;
+  await video.play();
+  // Let at least one real frame land before grabbing it.
+  await new Promise(r => setTimeout(r, 200));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+
+  stream.getTracks().forEach(track => track.stop());
+
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+  if (!blob) return;
+  const arrayBuffer = await blob.arrayBuffer();
+  const imageBuffer = Buffer.from(arrayBuffer);
+
+  await insertImageBuffer(imageBuffer, 'png');
 }
 
 // Loading indicator control functions
@@ -466,6 +601,82 @@ document.addEventListener('DOMContentLoaded', async () => {
   chatgptToggleBtn?.addEventListener('click', async () => {
     const newState = await ipcRenderer.invoke('toggle-chatgpt-destination', editor.value);
     applyChatgptState(newState);
+  });
+
+  // Per-note color (Item 1). Setting data-color on <body> is the only thing
+  // needed to retint the whole window -- see common.css's
+  // body[data-color="..."] blocks, which override the same --bg/--surface/
+  // --titlebar-bg variables note.css already uses everywhere else.
+  const colorToggleBtn = document.getElementById('color-toggle');
+  const colorPopover = document.getElementById('color-popover');
+  const colorSwatches = colorPopover ? Array.from(colorPopover.querySelectorAll('.color-swatch')) : [];
+
+  function applyNoteColor(color) {
+    document.body.setAttribute('data-color', color);
+    colorSwatches.forEach(sw => sw.classList.toggle('active', sw.dataset.color === color));
+  }
+
+  ipcRenderer.invoke('get-note-color').then(applyNoteColor);
+
+  colorToggleBtn?.addEventListener('click', e => {
+    e.stopPropagation();
+    colorPopover?.classList.toggle('hidden');
+  });
+
+  colorSwatches.forEach(sw => {
+    sw.addEventListener('click', async e => {
+      e.stopPropagation();
+      const newColor = await ipcRenderer.invoke('set-note-color', sw.dataset.color);
+      applyNoteColor(newColor);
+      colorPopover?.classList.add('hidden');
+    });
+  });
+
+  // "..." menu: Copy Note + Export as PDF (Item 7).
+  const moreMenuBtn = document.getElementById('more-menu-btn');
+  const moreMenu = document.getElementById('more-menu');
+  const copyNoteBtn = document.getElementById('copy-note-btn');
+  const exportPdfBtn = document.getElementById('export-pdf-btn');
+
+  moreMenuBtn?.addEventListener('click', e => {
+    e.stopPropagation();
+    moreMenu?.classList.toggle('hidden');
+  });
+
+  copyNoteBtn?.addEventListener('click', () => {
+    const { clipboard } = require('electron');
+    clipboard.writeText(editor.value);
+    moreMenu?.classList.add('hidden');
+    const originalTitle = copyNoteBtn.textContent;
+    copyNoteBtn.textContent = 'Copied!';
+    setTimeout(() => { copyNoteBtn.textContent = originalTitle; }, 1200);
+  });
+
+  exportPdfBtn?.addEventListener('click', async () => {
+    moreMenu?.classList.add('hidden');
+    const originalTitle = exportPdfBtn.textContent;
+    exportPdfBtn.textContent = 'Exporting...';
+    try {
+      const result = await ipcRenderer.invoke('export-note-pdf');
+      exportPdfBtn.textContent = result?.ok ? 'Exported!' : originalTitle;
+    } catch (err) {
+      console.error('Export as PDF failed:', err);
+      exportPdfBtn.textContent = originalTitle;
+    }
+    setTimeout(() => { exportPdfBtn.textContent = originalTitle; }, 1500);
+  });
+
+  // Closes any open popover/dropdown on an outside click -- both the color
+  // popover and the "..." menu share this one listener.
+  document.addEventListener('click', () => {
+    colorPopover?.classList.add('hidden');
+    moreMenu?.classList.add('hidden');
+  });
+
+  // Screenshot capture (Item 2).
+  const screenshotBtn = document.getElementById('screenshot-btn');
+  screenshotBtn?.addEventListener('click', () => {
+    captureScreenshot().catch(err => console.error('Screenshot capture failed:', err));
   });
 
   // viewMode is one of 'edit' | 'preview' | 'split'. Titlebar visibility is
@@ -996,12 +1207,26 @@ document.addEventListener('DOMContentLoaded', async () => {
   const fmtBoldBtn = document.getElementById('fmt-bold');
   const fmtItalicBtn = document.getElementById('fmt-italic');
   const fmtListBtn = document.getElementById('fmt-list');
+  const fmtChecklistBtn = document.getElementById('fmt-checklist');
+  const fmtUnderlineBtn = document.getElementById('fmt-underline');
+  const fmtStrikeBtn = document.getElementById('fmt-strike');
   const fmtImageBtn = document.getElementById('fmt-image');
   const imageFileInput = document.getElementById('image-file-input');
 
   fmtBoldBtn?.addEventListener('click', () => surround('**'));
   fmtItalicBtn?.addEventListener('click', () => surround('*'));
   fmtListBtn?.addEventListener('click', () => insertBulletList());
+  fmtChecklistBtn?.addEventListener('click', () => insertChecklist());
+  // Underline has no native Markdown syntax -- <u> is raw HTML passthrough,
+  // which marked renders as-is by default (same reason the checkbox
+  // renderer above emits raw <input> tags).
+  fmtUnderlineBtn?.addEventListener('click', () => surround('<u>', '</u>'));
+  // Ctrl+Shift+S (see main.js's default shortcuts) already drives its own
+  // toggle-aware strikethrough logic in the keydown handler above; this
+  // button uses the plainer surround() helper instead, matching Bold/
+  // Italic/Underline's mechanism as specified -- both end up producing the
+  // same '~~...~~' marked already renders.
+  fmtStrikeBtn?.addEventListener('click', () => surround('~~'));
   fmtImageBtn?.addEventListener('click', () => imageFileInput?.click());
   imageFileInput?.addEventListener('change', async (e) => {
     const file = e.target.files[0];

@@ -34,7 +34,52 @@
     --titlebar-height: 36px;
     /* Note window's persistent bottom formatting toolbar (see note.css) */
     --toolbar-height: 40px;
+
+    /* Per-note color palette (7 swatches, matching real Sticky Notes'
+       actual colors). Single source of truth for the raw hex values --
+       consumed by the swatch picker UI and the list row's color dot
+       (note.css / list.css, via var(--swatch-<name>)) AND by the
+       body[data-color="<name>"] tint overrides directly below, which
+       reuse the exact same override-the-named-variable mechanism
+       body.dark-mode already uses for --bg/--surface/--titlebar-bg. */
+    --swatch-yellow: #F5C84C;
+    --swatch-green: #7FB88F;
+    --swatch-blue: #7CA7D8;
+    --swatch-purple: #B48CC9;
+    --swatch-pink: #DD93B0;
+    --swatch-gray: #A6A6AC;
+    --swatch-charcoal: #4A4850;
 }
+
+/* Per-note color tint (light mode). Overrides the same --bg/--surface/
+   --titlebar-bg variables body.dark-mode overrides below -- the note
+   window's own CSS (note.css) never has to know about colors at all, it
+   just keeps using --bg/--surface/--titlebar-bg like it always has.
+   Charcoal is the one swatch that also flips --text-* (real Sticky Notes'
+   charcoal note reads as "always dark", light or dark app theme). */
+body[data-color="yellow"] { --bg: #FBF3D9; --surface: #FFFBEF; --titlebar-bg: #F5E7B8; }
+body[data-color="green"]  { --bg: #E7F1E9; --surface: #F2F8F3; --titlebar-bg: #D3E7D7; }
+body[data-color="blue"]   { --bg: #E6EEF6; --surface: #F1F6FB; --titlebar-bg: #D2E1F0; }
+body[data-color="purple"] { --bg: #F0E7F3; --surface: #F7F0F9; --titlebar-bg: #E1CDE9; }
+body[data-color="pink"]   { --bg: #F8E9EF; --surface: #FBF1F5; --titlebar-bg: #F0CFDD; }
+body[data-color="gray"]   { --bg: #ECECEE; --surface: #F5F5F6; --titlebar-bg: #DBDBDE; }
+body[data-color="charcoal"] {
+    --bg: #3C3A42; --surface: #46434C; --titlebar-bg: #2E2C33;
+    --text-primary: #F1EDF4; --text-secondary: #C7C1CF;
+    --border: #56525C; --hover: #4C4952;
+}
+
+/* Per-note color tint (dark mode). Same variables, muted/darkened so a
+   colored note still reads as "dark mode" rather than a bright pastel card
+   dropped into a dark UI. Charcoal has no separate dark-mode rule: its
+   light-mode values above are already dark, so body.dark-mode simply
+   inherits them unchanged. */
+body.dark-mode[data-color="yellow"] { --bg: #2E2A1C; --surface: #3A3524; --titlebar-bg: #241F14; }
+body.dark-mode[data-color="green"]  { --bg: #1E2A20; --surface: #26352A; --titlebar-bg: #182219; }
+body.dark-mode[data-color="blue"]   { --bg: #1C2734; --surface: #243040; --titlebar-bg: #151E29; }
+body.dark-mode[data-color="purple"] { --bg: #2A2034; --surface: #332740; --titlebar-bg: #201828; }
+body.dark-mode[data-color="pink"]   { --bg: #301F27; --surface: #3A2530; --titlebar-bg: #26181F; }
+body.dark-mode[data-color="gray"]   { --bg: #2A2A2E; --surface: #333338; --titlebar-bg: #201F23; }
 
 /* Dark mode variable override */
 body.dark-mode {
