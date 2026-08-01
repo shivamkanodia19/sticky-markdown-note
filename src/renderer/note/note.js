@@ -20,6 +20,12 @@ let currentFontSize = defaultFontSize;
 let userImagesDir = null; // User image save path
 let appRootPath = null; // Variable to store the app root path
 
+// "Send to ChatGPT" destination state for the note currently open in this
+// window. Declared at module scope (not inside the DOMContentLoaded closure)
+// because handleImagePaste, below, also needs to read it and lives outside
+// that closure.
+let chatgptTagged = false;
+
 let shortcuts = {};
 
 // Load shortcuts
@@ -240,6 +246,12 @@ async function handleImagePaste(event) {
           // Image added, so clean up orphaned images
           orphanedImageManager.cleanupOrphanedImages();
         });
+        // This save path bypasses the debounced 'input' handler above (no
+        // native input event is dispatched here), so the mirror sync has to
+        // be triggered explicitly too.
+        if (chatgptTagged) {
+          ipcRenderer.send('sync-chatgpt-mirror', String(editor.value));
+        }
       }
       
       break;
@@ -355,6 +367,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const viewSplitBtn = document.getElementById('view-split');
   const newNoteBtn = document.getElementById('new-note');
   const pinToggleBtn = document.getElementById('pin-toggle');
+  const chatgptToggleBtn = document.getElementById('chatgpt-toggle');
 
   // Reflect actual window state (set by main.js at creation time, defaulting
   // to pinned) rather than assuming -- keeps the button honest even if main
@@ -372,6 +385,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   pinToggleBtn?.addEventListener('click', async () => {
     const newState = await ipcRenderer.invoke('toggle-pin');
     applyPinState(newState);
+  });
+
+  // "Send to ChatGPT" destination toggle. `chatgptTagged` (module-scoped,
+  // shared with handleImagePaste) mirrors the state main.js caches on the
+  // BrowserWindow -- kept here too so the autosave handler below can decide,
+  // on every keystroke, whether to also sync the Drive mirror without an
+  // extra IPC round-trip per character typed.
+  function applyChatgptState(tagged) {
+    chatgptTagged = tagged;
+    if (!chatgptToggleBtn) return;
+    chatgptToggleBtn.classList.toggle('tagged', tagged);
+    chatgptToggleBtn.title = tagged
+      ? 'Sent to ChatGPT: mirrored in Google Drive (click to stop)'
+      : 'Send to ChatGPT (mirror to Google Drive)';
+  }
+
+  ipcRenderer.invoke('get-destinations').then(destinations => {
+    applyChatgptState(!!destinations?.chatgpt);
+  });
+
+  chatgptToggleBtn?.addEventListener('click', async () => {
+    const newState = await ipcRenderer.invoke('toggle-chatgpt-destination', editor.value);
+    applyChatgptState(newState);
   });
 
   // viewMode is one of 'edit' | 'preview' | 'split'. Titlebar visibility is
@@ -487,6 +523,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
       saveTimeout = setTimeout(() => {
         fs.writeFile(currentPath, String(text), () => {});
+        // Keep the Drive mirror in sync for as long as this note stays
+        // tagged. main.js re-checks its own cached tag state before writing,
+        // so this is safe to send unconditionally too, but skipping it here
+        // avoids a pointless IPC message for the common untagged case.
+        if (chatgptTagged) {
+          ipcRenderer.send('sync-chatgpt-mirror', String(text));
+        }
       }, 1000);
     }
   });

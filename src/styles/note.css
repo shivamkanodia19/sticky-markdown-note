@@ -185,6 +185,18 @@ body.only-mode #preview {
   color: #FFFFFF !important;
 }
 
+/* ChatGPT destination toggle: same dimmed/highlighted treatment as the pin
+   button above, so on/off destination state reads the same way at a glance. */
+#titlebar .title-btn#chatgpt-toggle {
+  opacity: 0.45 !important;
+}
+
+#titlebar .title-btn#chatgpt-toggle.tagged {
+  opacity: 1 !important;
+  background-color: var(--accent) !important;
+  color: #FFFFFF !important;
+}
+
 /* View mode segmented control (Edit / Preview / Split) */
 .view-toggle-group {
   -webkit-app-region: no-drag;

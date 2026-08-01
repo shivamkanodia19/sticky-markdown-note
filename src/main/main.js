@@ -17,6 +17,53 @@ const stateFilePath = path.join(app.getPath('userData'), 'note-window-state.json
 const notesDir = 'C:\\Users\\shiva\\project manager\\vault\\00 - Inbox';
 if (!fs.existsSync(notesDir)) fs.mkdirSync(notesDir, { recursive: true });
 
+// "Send to ChatGPT" destination: mirrors a tagged note's content into the
+// Google Drive desktop-sync folder, which Shivam has connected to ChatGPT as
+// a native Drive connector. This is a *mirror*, never the source of truth --
+// the vault Inbox copy above is always the real note. Drive may not be
+// mounted (sync client not running yet, drive letter changed, etc.), so every
+// mirror operation checks for the mount rather than assuming it exists.
+const driveRoot = 'G:\\My Drive';
+const chatgptMirrorDir = path.join(driveRoot, 'ChatGPT Notes');
+
+function ensureChatgptMirrorDir() {
+  try {
+    if (!fs.existsSync(driveRoot)) {
+      console.warn('Google Drive not mounted at', driveRoot, '- skipping ChatGPT mirror');
+      return false;
+    }
+    if (!fs.existsSync(chatgptMirrorDir)) {
+      fs.mkdirSync(chatgptMirrorDir, { recursive: true });
+    }
+    return true;
+  } catch (e) {
+    console.error('Failed to prepare ChatGPT mirror dir:', e);
+    return false;
+  }
+}
+
+function chatgptMirrorPathFor(notePath) {
+  return path.join(chatgptMirrorDir, path.basename(notePath));
+}
+
+function writeChatgptMirror(notePath, content) {
+  if (!ensureChatgptMirrorDir()) return;
+  try {
+    fs.writeFileSync(chatgptMirrorPathFor(notePath), content ?? '', 'utf-8');
+  } catch (e) {
+    console.error('ChatGPT mirror write failed:', e);
+  }
+}
+
+function deleteChatgptMirror(notePath) {
+  const mirrorPath = chatgptMirrorPathFor(notePath);
+  try {
+    if (fs.existsSync(mirrorPath)) fs.unlinkSync(mirrorPath);
+  } catch (e) {
+    console.error('ChatGPT mirror delete failed:', e);
+  }
+}
+
 // For saving the last session (open notes)
 const sessionFile = path.join(app.getPath('userData'), 'last-session.json');
 
@@ -124,6 +171,10 @@ function createNoteWindow(notePath, position = null, isNew = false) {
   // stops being pinned if Shivam explicitly un-pins it (recorded below).
   const pinned = savedBounds?.pinned !== undefined ? savedBounds.pinned : true;
 
+  // Multi-destination routing state (currently just "chatgpt"). Defaults to
+  // off/untagged -- unlike pin, there's no reason a brand-new note should
+  // start mirrored anywhere.
+
   // Create new window
   const win = new BrowserWindow({
     width: savedBounds?.width || 400,
@@ -157,6 +208,10 @@ function createNoteWindow(notePath, position = null, isNew = false) {
 
   win.notePath = notePath;
   win.isNewNote = isNew;
+  // Cached on the window instance so the frequent autosave-driven mirror
+  // sync (see 'sync-chatgpt-mirror') doesn't have to re-read/parse the
+  // state JSON file on every keystroke -- only the toggle handler mutates it.
+  win.chatgptTagged = !!savedBounds?.destinations?.chatgpt;
 
   win.on('focus', () => {
     win.webContents.send('window-focused');
@@ -246,6 +301,28 @@ function saveWindowState(notePath, updates) {
     }
   }
   data[fullPath] = { ...(data[fullPath] || {}), ...updates };
+  fs.writeFileSync(stateFilePath, JSON.stringify(data, null, 2));
+}
+
+// Destinations are stored as their own nested object (`destinations: {
+// chatgpt: true }`) rather than a top-level boolean, so this merges one key
+// into that object instead of replacing it wholesale -- keeps room to add a
+// second destination later (e.g. `destinations.somewhereElse`) without ever
+// touching this shape again, and keeps routing state fully independent of
+// `pinned`, which saveWindowState above already owns.
+function saveDestinationState(notePath, destKey, value) {
+  const fullPath = path.resolve(notePath);
+  let data = {};
+  if (fs.existsSync(stateFilePath)) {
+    try {
+      data = JSON.parse(fs.readFileSync(stateFilePath, 'utf-8'));
+    } catch {
+      data = {};
+    }
+  }
+  const existing = data[fullPath] || {};
+  const destinations = { ...(existing.destinations || {}), [destKey]: value };
+  data[fullPath] = { ...existing, destinations };
   fs.writeFileSync(stateFilePath, JSON.stringify(data, null, 2));
 }
 
@@ -358,6 +435,11 @@ ipcMain.on('delete-note', (event, noteFile) => {
   if (fs.existsSync(stateDataPath)) {
     try {
       const stateData = JSON.parse(fs.readFileSync(stateDataPath, 'utf-8'));
+      // Deleting a note that's still tagged for a destination shouldn't leave
+      // an orphaned mirror copy behind in Drive.
+      if (stateData[fullPath]?.destinations?.chatgpt) {
+        deleteChatgptMirror(fullPath);
+      }
       delete stateData[fullPath];
       fs.writeFileSync(stateDataPath, JSON.stringify(stateData, null, 2));
     } catch (err) {
@@ -417,6 +499,42 @@ ipcMain.handle('get-pin-state', event => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (!win || win.isDestroyed()) return false;
   return win.isAlwaysOnTop();
+});
+
+// "Send to ChatGPT" destination toggle -- same fromWebContents pattern as
+// toggle-pin. `content` is the renderer's current (possibly still-debouncing)
+// editor text, passed explicitly so turning the mirror on captures exactly
+// what's on screen rather than whatever was last flushed to disk.
+ipcMain.handle('toggle-chatgpt-destination', (event, content) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed() || !win.notePath) return false;
+
+  const newState = !win.chatgptTagged;
+  win.chatgptTagged = newState;
+  saveDestinationState(win.notePath, 'chatgpt', newState);
+
+  if (newState) {
+    writeChatgptMirror(win.notePath, content);
+  } else {
+    deleteChatgptMirror(win.notePath);
+  }
+
+  return newState;
+});
+
+ipcMain.handle('get-destinations', event => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return {};
+  return { chatgpt: !!win.chatgptTagged };
+});
+
+// Fire-and-forget mirror sync, called from the renderer's existing autosave
+// path right after it writes the primary file. Guarded by the cached
+// win.chatgptTagged flag so untagged notes never touch Drive.
+ipcMain.on('sync-chatgpt-mirror', (event, content) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed() || !win.notePath || !win.chatgptTagged) return;
+  writeChatgptMirror(win.notePath, content);
 });
 
 app.on('ready', async () => {
