@@ -350,8 +350,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const preview = document.getElementById('preview');
   const titlebar = document.getElementById('titlebar');
   const openListBtn = document.getElementById('open-list');
-  const viewToggleBtn = document.getElementById('view-toggle');
-  const onlyToggleBtn = document.getElementById('only-toggle');
+  const viewEditBtn = document.getElementById('view-edit');
+  const viewPreviewBtn = document.getElementById('view-preview');
+  const viewSplitBtn = document.getElementById('view-split');
   const newNoteBtn = document.getElementById('new-note');
   const pinToggleBtn = document.getElementById('pin-toggle');
 
@@ -373,13 +374,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     applyPinState(newState);
   });
 
-  // Set initial titlebar state
-  if (titlebar) {
-    titlebar.style.display = 'flex';
-  }
-
-  let viewMode = 'only';
-  let onlyTarget = 'preview';
+  // viewMode is one of 'edit' | 'preview' | 'split'. Titlebar visibility is
+  // handled entirely by CSS (opacity, via the 'blurred' class below) so
+  // there's no display state to set here.
+  let viewMode = 'preview';
   let saveTimeout = null;
 
   // Checkbox click event listener (event delegation)
@@ -393,23 +391,22 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function updateView() {
-    if (viewMode === 'both') {
+    if (viewMode === 'split') {
       editor.style.display = 'block';
       preview.style.display = 'block';
-      onlyToggleBtn.style.display = 'none';
-      viewToggleBtn.textContent = 'both';
     } else {
-      editor.style.display = onlyTarget === 'editor' ? 'block' : 'none';
-      preview.style.display = onlyTarget === 'preview' ? 'block' : 'none';
-      onlyToggleBtn.style.display = 'inline-block';
-      onlyToggleBtn.textContent = onlyTarget === 'editor' ? '✏️' : '📄';
-      viewToggleBtn.textContent = 'only';
+      editor.style.display = viewMode === 'edit' ? 'block' : 'none';
+      preview.style.display = viewMode === 'preview' ? 'block' : 'none';
     }
-    if (viewMode === 'only' && onlyTarget === 'editor') {
+    if (viewMode === 'edit') {
       editor.focus();
     }
     document.body.classList.remove('both-mode', 'only-mode');
-    document.body.classList.add(viewMode === 'both' ? 'both-mode' : 'only-mode');
+    document.body.classList.add(viewMode === 'split' ? 'both-mode' : 'only-mode');
+
+    [viewEditBtn, viewPreviewBtn, viewSplitBtn].forEach(btn => btn?.classList.remove('active'));
+    const activeBtn = viewMode === 'edit' ? viewEditBtn : viewMode === 'preview' ? viewPreviewBtn : viewSplitBtn;
+    activeBtn?.classList.add('active');
   }
 
   try {
@@ -429,7 +426,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   ipcRenderer.on('load-note', async (event, notePath, isNew) => {
     currentPath = notePath;
     if (isNew) {
-      viewMode = 'both';
+      viewMode = 'split';
     }
 
     showLoadingIndicator(); // Show loading indicator before reading file
@@ -468,19 +465,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Window focus/blur event handlers
+  // Window focus/blur: the titlebar recedes (fades, stops taking clicks) on
+  // blur rather than disappearing outright, so there's no pop-in/out
+  // flicker when refocusing (see #titlebar.blurred in note.css).
   ipcRenderer.on('window-focused', () => {
-    const titlebar = document.getElementById('titlebar');
-    if (titlebar) {
-      titlebar.style.display = 'flex';
-    }
+    titlebar?.classList.remove('blurred');
   });
 
   ipcRenderer.on('window-blurred', () => {
-    const titlebar = document.getElementById('titlebar');
-    if (titlebar) {
-      titlebar.style.display = 'none';
-    }
+    titlebar?.classList.add('blurred');
   });
 
   editor.addEventListener('input', () => {
@@ -516,16 +509,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             // Execute the action
             switch (action) {
                 case 'preview':
-                    viewMode = 'both';
+                    viewMode = 'split';
                     updateView();
                     break;
                 case 'toggle-view':
-                    if (viewMode === 'both' || onlyTarget === 'preview') {
-                        onlyTarget = 'editor';
-                    } else {
-                        onlyTarget = 'preview';
-                    }
-                    viewMode = 'only';
+                    // Toggle between edit-only and preview-only, exiting split.
+                    viewMode = (viewMode === 'split' || viewMode === 'preview') ? 'edit' : 'preview';
                     updateView();
                     break;
                 case 'open-main':
@@ -844,13 +833,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     { passive: false }
   );
 
-  viewToggleBtn?.addEventListener('click', () => {
-    viewMode = viewMode === 'both' ? 'only' : 'both';
+  viewEditBtn?.addEventListener('click', () => {
+    viewMode = 'edit';
     updateView();
   });
 
-  onlyToggleBtn?.addEventListener('click', () => {
-    onlyTarget = onlyTarget === 'editor' ? 'preview' : 'editor';
+  viewPreviewBtn?.addEventListener('click', () => {
+    viewMode = 'preview';
+    updateView();
+  });
+
+  viewSplitBtn?.addEventListener('click', () => {
+    viewMode = 'split';
     updateView();
   });
 

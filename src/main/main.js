@@ -45,6 +45,7 @@ function createMainWindow() {
     width: 400,
     height: 600,
     frame: false,
+    hasShadow: true,
     show: false, // Start hidden
     webPreferences: {
       nodeIntegration: true,
@@ -131,6 +132,7 @@ function createNoteWindow(notePath, position = null, isNew = false) {
     y: position?.y ?? savedBounds?.y,
     alwaysOnTop: pinned,
     frame: false,
+    hasShadow: true,
     show: false, // Start hidden
     webPreferences: {
       nodeIntegration: true,
@@ -418,26 +420,15 @@ ipcMain.handle('get-pin-state', event => {
 });
 
 app.on('ready', async () => {
-  createMainWindow();
-  createTray();
-
-  // Launch on login by default, so the app behaves like a real always-on
-  // sticky notes app instead of something that has to be started from a
-  // terminal each time. Only meaningful for an installed/packaged build --
-  // in dev mode this would register the dev Electron.exe path, which isn't
-  // useful. Uses Electron's built-in login-item API (HKCU Run key on
-  // Windows), not the unused `electron-auto-launch` dependency: that
-  // library's Windows implementation targets HKLM on x64, which a normal
-  // per-user, non-admin install cannot write to.
-  if (app.isPackaged) {
-    cleanStartup(); // remove any stale/old autostart entries first
-    const loginSettings = app.getLoginItemSettings();
-    if (!loginSettings.openAtLogin) {
-      app.setLoginItemSettings({ openAtLogin: true, path: process.execPath });
-    }
-  }
-
-  // Dynamically import electron-store and initialize store instance here
+  // Dynamically import electron-store and initialize the store instance --
+  // and register every IPC handler that depends on it -- BEFORE creating any
+  // window. Windows are created with show:false and only shown after
+  // did-finish-load, but their renderers call ipcRenderer.invoke('get-
+  // current-theme') as soon as their own script runs; if that happens
+  // before these handlers exist the invoke rejects, the dark-mode class
+  // never gets applied, and the window shows with whatever background the
+  // HTML/CSS defaulted to regardless of the real stored theme (a FOUC/wrong-
+  // theme flash). Registering handlers first removes the race entirely.
   Store = (await import('electron-store')).default;
   store = new Store();
 
@@ -497,6 +488,25 @@ app.on('ready', async () => {
       window.webContents.send('shortcuts-updated', shortcuts);
     });
   });
+
+  createMainWindow();
+  createTray();
+
+  // Launch on login by default, so the app behaves like a real always-on
+  // sticky notes app instead of something that has to be started from a
+  // terminal each time. Only meaningful for an installed/packaged build --
+  // in dev mode this would register the dev Electron.exe path, which isn't
+  // useful. Uses Electron's built-in login-item API (HKCU Run key on
+  // Windows), not the unused `electron-auto-launch` dependency: that
+  // library's Windows implementation targets HKLM on x64, which a normal
+  // per-user, non-admin install cannot write to.
+  if (app.isPackaged) {
+    cleanStartup(); // remove any stale/old autostart entries first
+    const loginSettings = app.getLoginItemSettings();
+    if (!loginSettings.openAtLogin) {
+      app.setLoginItemSettings({ openAtLogin: true, path: process.execPath });
+    }
+  }
 
   // Last session restore
   try {
@@ -583,6 +593,7 @@ function createSettingsWindow() {
     width: 600,
     height: 400,
     frame: false,
+    hasShadow: true,
     show: false, // Start hidden
     webPreferences: {
       nodeIntegration: true,

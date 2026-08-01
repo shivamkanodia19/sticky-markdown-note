@@ -3,20 +3,17 @@
     <head>
         <meta charset="UTF-8" />
         <title>Settings</title>
-        <style>
-            html, body {
-                background-color: #1a1a1a;
-                margin: 0;
-                padding: 0;
-            }
-        </style>
         <link rel="stylesheet" href="../../styles/common.css">
         <link rel="stylesheet" href="../../styles/settings.css">
     </head>
     <body>
-        <div id="toolbar">
+        <div id="titlebar">
             <span>Settings</span>
-            <button id="close-button" class="title-btn">✖</button>
+            <button id="close-button" class="title-btn close-btn" title="Close">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 6 6 18"/><path d="M6 6l12 12"/>
+                </svg>
+            </button>
         </div>
         <div class="settings-container">
             <div class="settings-section">

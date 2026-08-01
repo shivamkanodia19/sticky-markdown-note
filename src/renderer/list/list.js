@@ -16,6 +16,21 @@ function getNoteTitle(content) {
   return firstLine.trim().substring(0, 30) || '(No title)';
 }
 
+// Body preview shown under the timestamp in the list row: the second
+// non-empty line of the note (the first non-empty line is already used as
+// the title above).
+function getNoteSnippet(content) {
+  const lines = content.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+  return lines[1] || '';
+}
+
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   notesDir = await ipcRenderer.invoke('get-notes-dir');
 
@@ -54,9 +69,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       })
       .sort((a, b) => b.mtime - a.mtime); // Sort by modification time in descending order (latest first)
 
+    const visibleNotes = [];
+
     allNoteFiles.forEach(note => {
       const content = fs.readFileSync(note.fullPath, 'utf-8');
-      // const stats = fs.statSync(fullPath); // stats is already included in the note object, so remove
       const lowerContent = content.toLowerCase();
       const lowerTitle = getNoteTitle(content).toLowerCase();
       if (
@@ -66,32 +82,38 @@ document.addEventListener('DOMContentLoaded', async () => {
       ) {
         return;
       }
+      visibleNotes.push({ note, content });
+    });
+
+    if (visibleNotes.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.textContent = currentSearch
+        ? 'No notes match your search.'
+        : 'No notes yet. Click New note to get started.';
+      container.appendChild(empty);
+      return;
+    }
+
+    visibleNotes.forEach(({ note, content }) => {
       const div = document.createElement('div');
       div.className = 'note';
       div.innerHTML = `
-                <div class="title">${getNoteTitle(content)}</div>
+                <div class="title">${escapeHtml(getNoteTitle(content))}</div>
+                <div class="snippet">${escapeHtml(getNoteSnippet(content))}</div>
                 <div class="time">${new Date(note.mtime).toLocaleString()}</div>
+                <button class="delete-btn" title="Delete note">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>
+                  </svg>
+                </button>
             `;
       div.addEventListener('click', () => {
         ipcRenderer.send('open-note', note.file);
       });
-      div.addEventListener('contextmenu', e => {
-        e.preventDefault();
-        document.querySelectorAll('.delete-btn').forEach(btn => btn.remove());
-        const delBtn = document.createElement('button');
-        delBtn.textContent = 'Delete';
-        delBtn.className = 'delete-btn';
-        delBtn.style.position = 'absolute';
-        delBtn.style.left = `${e.pageX}px`;
-        delBtn.style.top = `${e.pageY}px`;
-        delBtn.style.zIndex = '1000';
-        delBtn.style.cursor = 'pointer';
-        delBtn.addEventListener('click', () => {
-          ipcRenderer.send('delete-note', note.file);
-          delBtn.remove();
-        });
-        document.body.appendChild(delBtn);
-        window.addEventListener('click', () => delBtn.remove(), { once: true });
+      div.querySelector('.delete-btn').addEventListener('click', e => {
+        e.stopPropagation(); // Don't also trigger the row's open-note click
+        ipcRenderer.send('delete-note', note.file);
       });
       container.appendChild(div);
     });

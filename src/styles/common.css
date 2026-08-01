@@ -2,125 +2,190 @@
 
 /* Base variables (Light mode default) */
 :root {
-    --bg-color: #f5f5f5;
-    --text-color: #333333;
-    --card-bg: #ffffff;
-    --button-bg: #e0e0e0;
-    --button-hover: #d0d0d0;
-    --button-text: #333333;
-    --border-color: #ddd;
-    --hover-color: #eee;
-    --accent-color: #8F689D;
-    --accent-hover-color: #7A5A85;
-    --accent-button-text: #ffffff;
-    --light-accent-color: #E6DAEC;
-    --medium-accent-button-bg: #E8E8E8; /* Darker gray than titlebar */
-    --ultra-light-hover: #FCF8FC; /* Very light hover color (for general buttons) */
-    --titlebar-bg: #F5F5F5; /* Settings window titlebar color */
+    --bg: #FAF8F6;
+    --surface: #FFFFFF;
+    --titlebar-bg: #F1EEEA;
+    --text-primary: #2A2630;
+    --text-secondary: #6E6877;
+    --border: #E3DFDA;
+    --hover: #EFEAE5;
+    --accent: #7A5981;
+    --accent-soft: #EFE3F1;
+    --accent-hover: #6B4D71;
+    --danger: #B3413C;
+    --danger-soft: #F7E3E1;
+
+    /* Legacy names kept as aliases: note.css:91-128 (checkbox styling) is
+       intentionally left untouched per the design brief and still refers to
+       these directly. */
+    --accent-color: var(--accent);
+    --accent-hover-color: var(--accent-hover);
+    --accent-button-text: #FFFFFF;
+
+    /* Spacing system */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+    --radius: 8px;
+    --radius-sm: 6px;
+    --titlebar-height: 36px;
 }
 
 /* Dark mode variable override */
 body.dark-mode {
-    --bg-color: #1a1a1a;
-    --text-color: #ffffff;
-    --card-bg: #2d2d2d;
-    --button-bg: #4a4a4a;
-    --button-hover: #5a5a5a;
-    --button-text: #ffffff;
-    --border-color: #444;
-    --hover-color: #2a2a2a;
-    --accent-color: #8F689D;
-    --accent-hover-color: #A07CAE;
-    --accent-button-text: #ffffff;
-    --light-accent-color: #3C334D;
-    --medium-accent-button-bg: #2D2D2D; /* Darker gray than dark mode titlebar */
-    --ultra-light-hover: #1F1B27; /* Very light hover color (for general buttons) */
-    --titlebar-bg: #1a1a1a; /* Dark mode settings window titlebar color */
+    --bg: #1E1B22;
+    --surface: #262230;
+    --titlebar-bg: #17141C;
+    --text-primary: #ECE7F0;
+    --text-secondary: #A89FB2;
+    --border: #3A3542;
+    --hover: #2E2938;
+    --accent: #A57DB8;
+    --accent-soft: #362E3F;
+    --accent-hover: #B992CB;
+    --danger: #E2726B;
+    --danger-soft: #3B2422;
+
+    --accent-color: var(--accent);
+    --accent-hover-color: var(--accent-hover);
+    --accent-button-text: #FFFFFF;
 }
 
 /* Base styles */
 html {
-    background-color: var(--bg-color);
+    background-color: var(--bg);
 }
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
     margin: 0;
     padding: 0;
-    background-color: var(--bg-color);
-    color: var(--text-color);
+    background-color: var(--bg);
+    color: var(--text-primary);
     height: 100vh;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
 }
 
-/* Titlebar styles */
+/* Titlebar styles -- shared shell for List / Note / Settings windows.
+   Window-specific layout needs (e.g. the Note window floating its titlebar
+   over the editor so it can fade on blur) are added in that window's own
+   stylesheet; colors, height, and button behavior live here so all three
+   windows look like one system. */
 #titlebar {
-    height: 36px;
+    height: var(--titlebar-height);
+    min-height: var(--titlebar-height);
     background-color: var(--titlebar-bg);
-    color: var(--text-color);
+    color: var(--text-primary);
     position: sticky;
     top: 0;
     z-index: 99;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0 8px;
+    padding: 0 var(--space-2);
     -webkit-app-region: drag;
     user-select: none;
-    font-weight: bold;
-    border-bottom: 1px solid var(--border-color);
+    font-weight: 600;
+    font-size: 13px;
+    border-bottom: 1px solid var(--border);
+}
+
+#titlebar > div {
+    display: flex;
+    align-items: center;
 }
 
 #titlebar button {
     -webkit-app-region: no-drag;
-    height: 30px;
-    line-height: 30px;
-    padding: 0 10px;
-    font-size: 13px;
-    background-color: var(--titlebar-bg); /* Same as titlebar background color */
-    color: var(--text-color);
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background-color: transparent;
+    color: var(--text-secondary);
     border: none;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 #titlebar button:hover {
-    background-color: var(--button-hover); /* Use button-hover color on hover */
+    background-color: var(--hover);
+    color: var(--text-primary);
 }
 
 #titlebar .title-btn {
-    margin-left: 8px;
+    margin-left: var(--space-1);
     opacity: 1 !important;
+}
+
+#titlebar .close-btn:hover {
+    background-color: var(--danger-soft);
+    color: var(--danger);
 }
 
 input,
 textarea,
 select {
-    background-color: var(--bg-color);
-    color: var(--text-color);
-    border: 1px solid var(--border-color);
+    background-color: var(--surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-family: inherit;
 }
 
 input::placeholder,
 textarea::placeholder {
-    color: var(--text-color);
+    color: var(--text-secondary);
 }
 
 /* Common button styles */
 button {
-    background-color: var(--medium-accent-button-bg);
-    color: var(--text-color);
+    background-color: var(--hover);
+    color: var(--text-primary);
     border: none;
-    padding: 8px 16px;
-    border-radius: 4px;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-sm);
     cursor: pointer;
     font-size: 0.9em;
-    transition: background-color 0.2s;
+    transition: background-color 0.15s ease, color 0.15s ease;
     -webkit-app-region: no-drag;
 }
 
 button:hover {
-    background-color: var(--ultra-light-hover);
+    background-color: var(--border);
+}
+
+/* Primary action buttons (e.g. "New note") -- the one place besides
+   checkboxes/code blocks the accent color is meant to show up. */
+button.primary {
+    background-color: var(--accent);
+    color: #FFFFFF;
+}
+
+button.primary:hover {
+    background-color: var(--accent-hover);
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--accent-soft);
+    border-color: var(--accent);
+}
+
+svg.icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    display: block;
 }
