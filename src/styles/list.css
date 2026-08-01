@@ -79,7 +79,34 @@
     border-left-color: var(--accent);
 }
 
+/* Row for the color dot + title, side by side (Item 1's list-row
+   indicator). The title itself keeps its own ellipsis/overflow rules --
+   row-top just adds the dot ahead of it without disturbing that. */
+.row-top {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0; /* let .title's text-overflow: ellipsis actually apply */
+}
+
+.color-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.color-dot[data-color="yellow"]   { background-color: var(--swatch-yellow); }
+.color-dot[data-color="green"]    { background-color: var(--swatch-green); }
+.color-dot[data-color="blue"]     { background-color: var(--swatch-blue); }
+.color-dot[data-color="purple"]   { background-color: var(--swatch-purple); }
+.color-dot[data-color="pink"]     { background-color: var(--swatch-pink); }
+.color-dot[data-color="gray"]     { background-color: var(--swatch-gray); }
+.color-dot[data-color="charcoal"] { background-color: var(--swatch-charcoal); }
+
 .title {
+    flex: 1;
+    min-width: 0;
     font-size: 14px;
     font-weight: 600;
     color: var(--text-primary);
@@ -87,6 +114,15 @@
     overflow: hidden;
     text-overflow: ellipsis;
     padding-right: 28px; /* keep clear of the hover trash icon */
+}
+
+/* Search match highlight (Item 5) -- title and snippet both use <mark>
+   around the actually-matched substring. */
+mark {
+    background-color: var(--accent-soft);
+    color: var(--text-primary);
+    border-radius: 2px;
+    padding: 0 1px;
 }
 
 .snippet {

@@ -31,6 +31,52 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;');
 }
 
+// Wraps the first case-insensitive occurrence of `query` inside `text` in
+// <mark>, escaping the three slices (before/match/after) separately rather
+// than escaping first and searching second -- escaping can change string
+// length (e.g. "&" -> "&amp;"), which would throw off a match index found
+// against the already-escaped string.
+function highlightMatch(text, query) {
+  if (!query) return escapeHtml(text);
+  const idx = text.toLowerCase().indexOf(query);
+  if (idx === -1) return escapeHtml(text);
+  const before = text.slice(0, idx);
+  const match = text.slice(idx, idx + query.length);
+  const after = text.slice(idx + query.length);
+  return `${escapeHtml(before)}<mark>${escapeHtml(match)}</mark>${escapeHtml(after)}`;
+}
+
+// Search-aware snippet (Item 5): when there's no query, or the query only
+// hits the title (already highlighted separately), this is just the normal
+// second-line preview. When the query hits the body text, build a small
+// window of context AROUND the actual match instead of the fixed
+// second-line preview, so the match is guaranteed to be visible and
+// highlightable rather than possibly appearing later in the note than
+// whatever line normally gets shown.
+function getSearchSnippet(content, query) {
+  const plainSnippet = getNoteSnippet(content);
+  if (!query) return escapeHtml(plainSnippet);
+
+  const lowerTitle = getNoteTitle(content).toLowerCase();
+  if (lowerTitle.includes(query) && !plainSnippet.toLowerCase().includes(query)) {
+    // Title already carries the highlighted match; snippet stays as-is.
+    return escapeHtml(plainSnippet);
+  }
+
+  const lowerContent = content.toLowerCase();
+  const idx = lowerContent.indexOf(query);
+  if (idx === -1) return escapeHtml(plainSnippet);
+
+  const radius = 50;
+  const start = Math.max(0, idx - radius);
+  const end = Math.min(content.length, idx + query.length + radius);
+  let windowText = content.slice(start, end).replace(/\s+/g, ' ').trim();
+  if (start > 0) windowText = '…' + windowText;
+  if (end < content.length) windowText += '…';
+
+  return highlightMatch(windowText, query);
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   notesDir = await ipcRenderer.invoke('get-notes-dir');
 
@@ -53,9 +99,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     applyTheme(theme);
   });
 
-  function loadNotes() {
+  async function loadNotes() {
     container.innerHTML = '';
-    
+
+    // Per-note colors (Item 1's list-row dot) live in main.js's state file,
+    // keyed by full path -- read once per render rather than per row.
+    const colors = await ipcRenderer.invoke('get-note-colors').catch(() => ({}));
+
     const allNoteFiles = fs.readdirSync(notesDir)
       .filter(file => file.endsWith('.md'))
       .map(file => {
@@ -75,15 +125,28 @@ document.addEventListener('DOMContentLoaded', async () => {
       const content = fs.readFileSync(note.fullPath, 'utf-8');
       const lowerContent = content.toLowerCase();
       const lowerTitle = getNoteTitle(content).toLowerCase();
-      if (
-        currentSearch &&
-        !lowerContent.includes(currentSearch) &&
-        !lowerTitle.includes(currentSearch)
-      ) {
-        return;
+
+      // Ranking (Item 5): title matches outrank content-only matches. Score
+      // stays 0 (all equal) when there's no search, so the existing mtime
+      // order below is untouched in the no-search case -- this is a
+      // ranking/display upgrade on top of the same substring match, not a
+      // new match algorithm.
+      let score = 0;
+      if (currentSearch) {
+        const titleMatch = lowerTitle.includes(currentSearch);
+        const contentMatch = lowerContent.includes(currentSearch);
+        if (!titleMatch && !contentMatch) return;
+        score = titleMatch ? 2 : 1;
       }
-      visibleNotes.push({ note, content });
+
+      visibleNotes.push({ note, content, score, color: colors[note.fullPath] || 'yellow' });
     });
+
+    if (currentSearch) {
+      // Array.prototype.sort is stable (guaranteed since ES2019), so notes
+      // with equal scores keep the mtime-descending order they arrived in.
+      visibleNotes.sort((a, b) => b.score - a.score);
+    }
 
     if (visibleNotes.length === 0) {
       const empty = document.createElement('div');
@@ -95,12 +158,20 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
-    visibleNotes.forEach(({ note, content }) => {
+    visibleNotes.forEach(({ note, content, color }) => {
+      const titleHtml = currentSearch
+        ? highlightMatch(getNoteTitle(content), currentSearch)
+        : escapeHtml(getNoteTitle(content));
+      const snippetHtml = getSearchSnippet(content, currentSearch);
+
       const div = document.createElement('div');
       div.className = 'note';
       div.innerHTML = `
-                <div class="title">${escapeHtml(getNoteTitle(content))}</div>
-                <div class="snippet">${escapeHtml(getNoteSnippet(content))}</div>
+                <div class="row-top">
+                  <span class="color-dot" data-color="${color}" title="${color}"></span>
+                  <div class="title">${titleHtml}</div>
+                </div>
+                <div class="snippet">${snippetHtml}</div>
                 <div class="time">${new Date(note.mtime).toLocaleString()}</div>
                 <button class="delete-btn" title="Delete note">
                   <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
