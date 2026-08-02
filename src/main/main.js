@@ -14,6 +14,34 @@ const DEFAULT_NOTE_COLOR = 'yellow';
 
 app.setAppUserModelId('com.hsmin.stickymarkdownnote');
 
+// Single-instance lock. Windows launches every "open" (desktop icon,
+// Start Menu, installer's "run after install" checkbox) as a brand new
+// process. Without this, each launch attempt spins up its own full second
+// copy of the app sharing the same userData folder -- same
+// note-window-state.json, same last-session.json -- as any already-running
+// instance. That's exactly the setup that let two live instances race on
+// note-window-state.json and wipe real pin/color/ChatGPT-destination
+// entries in a prior incident. requestSingleInstanceLock() makes every
+// launch attempt after the first fail to acquire the lock; that failing
+// attempt quits immediately below, before creating any windows or
+// registering any of the handlers further down this file. The lock-holding
+// (first) instance gets a 'second-instance' event instead and brings itself
+// to the foreground -- the standard "clicking the icon again just focuses
+// what's already running" behavior.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  // Another instance already holds the lock -- quit immediately. The
+  // app.on('ready', ...) handler below still guards on
+  // gotSingleInstanceLock too, so even in the brief window before quit()
+  // takes effect this process never creates a window or registers a
+  // duplicate set of ipcMain handlers.
+  app.quit();
+}
+
+app.on('second-instance', () => {
+  showMemoList();
+});
+
 const openNoteWindows = {}; // { fullPath: BrowserWindow }
 
 const stateFilePath = path.join(app.getPath('userData'), 'note-window-state.json');
@@ -394,16 +422,65 @@ function createNewNote(position = null) {
   }
 }
 
+// Atomic write for note-window-state.json. Every write site below used to
+// write straight to stateFilePath -- fs.writeFileSync() to an existing path
+// truncates it first, then streams the new content in. If the process dies
+// between the truncate and the final byte (crash, kill, power loss, or a
+// second process fighting over the same file -- exactly what happened here
+// once already, wiping several of Shivam's real pin/color/ChatGPT-
+// destination entries), the file is left as an unrecoverable partial blob
+// instead of either the old or the new content.
+//
+// The fix is the standard atomic-write pattern: write the full new content
+// to a throwaway temp file in the SAME directory as stateFilePath (same
+// directory matters -- fs.renameSync is only atomic when source and
+// destination share a filesystem/volume), then fs.renameSync it over the
+// real path. rename() is atomic at the OS level, so any reader always sees
+// either the complete old file or the complete new one, never a partial
+// write -- a crash after the temp file is written but before the rename
+// just leaves an orphaned temp file, never a corrupted real one. The temp
+// name includes this process's pid so two note-window-state writers (e.g.
+// this app plus some future second writer) can never collide on the same
+// temp path.
+function writeStateFileAtomic(data) {
+  const tmpPath = path.join(
+    path.dirname(stateFilePath),
+    `.note-window-state.${process.pid}.${Date.now()}.tmp`
+  );
+  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+  fs.renameSync(tmpPath, stateFilePath);
+}
+
+// Centralized, BOM-tolerant read for note-window-state.json. Every call site
+// below used to do its own `JSON.parse(fs.readFileSync(stateFilePath,
+// 'utf-8'))` with a bare try/catch that fell back to `{}` on ANY parse
+// failure -- including a leading UTF-8 BOM (e.g. from the file once being
+// opened/saved in Notepad, which adds one by default), which this Node/V8
+// version's JSON.parse does NOT strip automatically. That fallback-to-`{}`
+// is exactly the corruption path this whole hardening pass exists to close:
+// a BOM'd-but-otherwise-perfectly-valid file was silently treated as empty,
+// so the very next save wrote back a file containing ONLY that one update,
+// discarding every other note's pin/color/ChatGPT-destination entry --
+// confirmed live while testing this fix. Stripping a leading U+FEFF before
+// parsing (and normalizing to always return an object, never null/undefined)
+// makes every one of the read sites below immune to this, regardless of how
+// the BOM got there in the first place.
+function readStateFile() {
+  if (!fs.existsSync(stateFilePath)) return {};
+  try {
+    const raw = fs.readFileSync(stateFilePath, 'utf-8').replace(/^\uFEFF/, '');
+    const data = JSON.parse(raw);
+    return data && typeof data === 'object' ? data : {};
+  } catch (e) {
+    console.error('note-window-state.json failed to parse -- treating as empty rather than overwriting:', e);
+    return {};
+  }
+}
+
 function loadWindowState(notePath) {
   const fullPath = path.resolve(notePath);
-  if (!fs.existsSync(stateFilePath)) return null;
-
-  try {
-    const data = JSON.parse(fs.readFileSync(stateFilePath, 'utf-8'));
-    return data[fullPath] || null;
-  } catch {
-    return null;
-  }
+  const data = readStateFile();
+  return data[fullPath] || null;
 }
 
 // Merges `updates` (bounds and/or pinned) into the existing record for this
@@ -412,16 +489,9 @@ function loadWindowState(notePath) {
 // different event handlers at different times.
 function saveWindowState(notePath, updates) {
   const fullPath = path.resolve(notePath);
-  let data = {};
-  if (fs.existsSync(stateFilePath)) {
-    try {
-      data = JSON.parse(fs.readFileSync(stateFilePath, 'utf-8'));
-    } catch {
-      data = {};
-    }
-  }
+  const data = readStateFile();
   data[fullPath] = { ...(data[fullPath] || {}), ...updates };
-  fs.writeFileSync(stateFilePath, JSON.stringify(data, null, 2));
+  writeStateFileAtomic(data);
 }
 
 // Destinations are stored as their own nested object (`destinations: {
@@ -432,18 +502,11 @@ function saveWindowState(notePath, updates) {
 // `pinned`, which saveWindowState above already owns.
 function saveDestinationState(notePath, destKey, value) {
   const fullPath = path.resolve(notePath);
-  let data = {};
-  if (fs.existsSync(stateFilePath)) {
-    try {
-      data = JSON.parse(fs.readFileSync(stateFilePath, 'utf-8'));
-    } catch {
-      data = {};
-    }
-  }
+  const data = readStateFile();
   const existing = data[fullPath] || {};
   const destinations = { ...(existing.destinations || {}), [destKey]: value };
   data[fullPath] = { ...existing, destinations };
-  fs.writeFileSync(stateFilePath, JSON.stringify(data, null, 2));
+  writeStateFileAtomic(data);
 }
 
 function cleanStartup() {
@@ -609,10 +672,10 @@ ipcMain.handle('delete-note', async (event, noteFile) => {
   let stateEntry = null;
   if (fs.existsSync(stateFilePath)) {
     try {
-      const stateData = JSON.parse(fs.readFileSync(stateFilePath, 'utf-8'));
+      const stateData = readStateFile();
       stateEntry = stateData[fullPath] || null;
       delete stateData[fullPath];
-      fs.writeFileSync(stateFilePath, JSON.stringify(stateData, null, 2));
+      writeStateFileAtomic(stateData);
     } catch (err) {
       console.error('Failed to clean up window state:', err);
     }
@@ -670,16 +733,9 @@ ipcMain.handle('undo-delete-note', async (event, noteFile) => {
   }
 
   if (pending.stateEntry) {
-    let data = {};
-    if (fs.existsSync(stateFilePath)) {
-      try {
-        data = JSON.parse(fs.readFileSync(stateFilePath, 'utf-8'));
-      } catch {
-        data = {};
-      }
-    }
+    const data = readStateFile();
     data[fullPath] = pending.stateEntry;
-    fs.writeFileSync(stateFilePath, JSON.stringify(data, null, 2));
+    writeStateFileAtomic(data);
   }
 
   if (pending.hadMirror) {
@@ -796,14 +852,7 @@ ipcMain.handle('get-note-color', event => {
 // directly rather than going through any open BrowserWindow, since most
 // listed notes have no open window at all.
 ipcMain.handle('get-note-colors', () => {
-  let data = {};
-  if (fs.existsSync(stateFilePath)) {
-    try {
-      data = JSON.parse(fs.readFileSync(stateFilePath, 'utf-8'));
-    } catch {
-      data = {};
-    }
-  }
+  const data = readStateFile();
   const colors = {};
   for (const [fullPath, entry] of Object.entries(data)) {
     if (entry && NOTE_COLORS.includes(entry.color)) {
@@ -972,6 +1021,10 @@ ipcMain.on('sync-chatgpt-mirror', (event, content) => {
 });
 
 app.on('ready', async () => {
+  // Second instance already told to quit above -- never create a window or
+  // register a second copy of every handler below.
+  if (!gotSingleInstanceLock) return;
+
   // Dynamically import electron-store and initialize the store instance --
   // and register every IPC handler that depends on it -- BEFORE creating any
   // window. Windows are created with show:false and only shown after
