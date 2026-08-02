@@ -539,34 +539,80 @@ ipcMain.on('create-new-note-nearby', event => {
   createNewNote(newPos);
 });
 
-ipcMain.on('delete-note', async (event, noteFile) => {
+// Delete + Undo (safety fix). An empty note (confirmed by reading the
+// actual file content -- trimmed, not a UI flag) deletes with zero
+// friction, exactly like before. A note with real content is ALSO deleted
+// immediately -- the action should feel instant, matching Gmail/Superhuman-
+// style undo patterns, not a blocking confirmation dialog -- but its
+// content, its full state-file entry (pin/color/chatgpt destination), and
+// whether it had a ChatGPT mirror are cached in memory for UNDO_WINDOW_MS so
+// the renderer's toast can offer a genuine, working Undo.
+//
+// This is the "delete-and-cache-for-restore" approach, not a soft-delete-
+// with-delay: the file is really gone from disk the instant this handler
+// returns. Chosen over delaying the real unlink because deleteChatgptMirror
+// below is already unconditional and immediate -- keeping the mirror's
+// deletion in lockstep with the primary file's (both gone together, both
+// restorable together) is simpler and less error-prone than adding a second,
+// slower-to-unwind delayed-delete path for only one of the two files.
+//
+// Not persisted to disk anywhere -- an app restart during the few-second
+// undo window loses the undo option, which matches "the file is genuinely,
+// immediately gone" semantics: there's no on-disk trace of a pending undo
+// to restart from, same as any other in-memory-only runtime state in main.js
+// (openNoteWindows, lastMirroredContent, driveMountCache).
+const UNDO_WINDOW_MS = 6000; // renderer's toast shows Undo for 5s; outlives it by a 1s margin
+const pendingDeletes = new Map(); // fullPath -> { content, stateEntry, hadMirror, timer }
+
+ipcMain.handle('delete-note', async (event, noteFile) => {
   const fullPath = path.resolve(path.join(notesDir, noteFile));
+
+  let content;
+  try {
+    content = await fs.promises.readFile(fullPath, 'utf-8');
+  } catch (e) {
+    if (e.code === 'ENOENT') return { ok: false, error: 'not found' };
+    console.error('Failed to read note before delete:', e);
+    return { ok: false, error: String(e) };
+  }
+  const isEmpty = content.trim().length === 0;
 
   // Close the window (if open) BEFORE wiping its state entry. win.close()
   // synchronously fires the 'close' listener, which calls saveWindowState
   // and would otherwise re-write a fresh bounds-only record for fullPath
   // right after we deleted it, leaving a stale orphaned entry behind for
-  // every deleted note.
+  // every deleted note. Doing this first also means that stray bounds-only
+  // write lands (merged into the existing entry, harmlessly) BEFORE the
+  // snapshot-then-delete below, so the snapshot still captures the real
+  // pinned/color/destinations values, not a stripped-down stub.
   if (openNoteWindows[fullPath]) {
     openNoteWindows[fullPath].close(); // Automatically cleaned up in 'closed' event
   }
 
+  // Mirror presence is checked against the actual file on disk -- the
+  // ground truth -- rather than any cached tag flag, since the note's
+  // window (and its win.chatgptTagged) may not even be open right now.
+  let hadMirror = false;
+  try {
+    await fs.promises.access(chatgptMirrorPathFor(fullPath));
+    hadMirror = true;
+  } catch {
+    hadMirror = false;
+  }
+
   // Deleting a note that's mirrored shouldn't leave an orphaned copy behind
-  // in Drive. Called unconditionally rather than gated on a persisted
-  // destinations flag: new notes now default to tagged (see
-  // createNoteWindow) without that default ever being written to disk, so a
-  // brand-new tagged note deleted before any explicit toggle would have no
-  // state-file entry to check. deleteChatgptMirror already no-ops silently
-  // (ENOENT) when there's nothing to remove, so this is safe for untagged
-  // notes too.
+  // in Drive. Called unconditionally rather than gated on hadMirror:
+  // deleteChatgptMirror already no-ops silently (ENOENT) when there's
+  // nothing to remove, so this is safe for untagged notes too.
   await deleteChatgptMirror(fullPath);
 
-  const stateDataPath = path.join(app.getPath('userData'), 'note-window-state.json');
-  if (fs.existsSync(stateDataPath)) {
+  let stateEntry = null;
+  if (fs.existsSync(stateFilePath)) {
     try {
-      const stateData = JSON.parse(fs.readFileSync(stateDataPath, 'utf-8'));
+      const stateData = JSON.parse(fs.readFileSync(stateFilePath, 'utf-8'));
+      stateEntry = stateData[fullPath] || null;
       delete stateData[fullPath];
-      fs.writeFileSync(stateDataPath, JSON.stringify(stateData, null, 2));
+      fs.writeFileSync(stateFilePath, JSON.stringify(stateData, null, 2));
     } catch (err) {
       console.error('Failed to clean up window state:', err);
     }
@@ -581,6 +627,70 @@ ipcMain.on('delete-note', async (event, noteFile) => {
   if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
     mainWindow.webContents.send('refresh-list');
   }
+
+  if (isEmpty) {
+    // Nothing worth restoring -- no cache entry, no undo, matches the "empty
+    // notes deletion should be automatic" requirement exactly.
+    return { ok: true, isEmpty: true };
+  }
+
+  // Cache for Undo. Keyed by fullPath -- generateNewNoteFilePath's
+  // ISO-timestamp naming means a brand-new note can never collide with a
+  // still-pending delete's key while its undo window is open.
+  if (pendingDeletes.has(fullPath)) {
+    clearTimeout(pendingDeletes.get(fullPath).timer);
+  }
+  const timer = setTimeout(() => {
+    pendingDeletes.delete(fullPath);
+  }, UNDO_WINDOW_MS);
+  pendingDeletes.set(fullPath, { content, stateEntry, hadMirror, timer });
+
+  return { ok: true, isEmpty: false };
+});
+
+// Undo for the delete-and-cache-for-restore flow above. Recreates the exact
+// file content and restores the exact state-file entry (pin/color/chatgpt
+// destination) that existed right before deletion -- not a fresh empty note
+// with the same name -- and re-writes the ChatGPT mirror too, if the
+// deleted note had one, keeping the mirror's lifecycle in sync with the
+// primary file's on the way back as well as on the way out.
+ipcMain.handle('undo-delete-note', async (event, noteFile) => {
+  const fullPath = path.resolve(path.join(notesDir, noteFile));
+  const pending = pendingDeletes.get(fullPath);
+  if (!pending) return { ok: false, error: 'expired' };
+
+  clearTimeout(pending.timer);
+  pendingDeletes.delete(fullPath);
+
+  try {
+    await fs.promises.writeFile(fullPath, pending.content, 'utf-8');
+  } catch (e) {
+    console.error('Undo delete failed (file restore):', e);
+    return { ok: false, error: String(e) };
+  }
+
+  if (pending.stateEntry) {
+    let data = {};
+    if (fs.existsSync(stateFilePath)) {
+      try {
+        data = JSON.parse(fs.readFileSync(stateFilePath, 'utf-8'));
+      } catch {
+        data = {};
+      }
+    }
+    data[fullPath] = pending.stateEntry;
+    fs.writeFileSync(stateFilePath, JSON.stringify(data, null, 2));
+  }
+
+  if (pending.hadMirror) {
+    await writeChatgptMirror(fullPath, pending.content);
+  }
+
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+    mainWindow.webContents.send('refresh-list');
+  }
+
+  return { ok: true };
 });
 
 ipcMain.on('open-main-window', () => {

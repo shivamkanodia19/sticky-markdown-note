@@ -197,9 +197,39 @@ document.addEventListener('DOMContentLoaded', async () => {
       div.addEventListener('click', () => {
         ipcRenderer.send('open-note', note.file);
       });
-      div.querySelector('.delete-btn').addEventListener('click', e => {
+      div.querySelector('.delete-btn').addEventListener('click', async e => {
         e.stopPropagation(); // Don't also trigger the row's open-note click
-        ipcRenderer.send('delete-note', note.file);
+
+        // main.js's delete-note handler reads the actual file content and
+        // deletes immediately either way -- an empty note (whitespace-only
+        // counts as empty) gets zero friction, exactly as before. A note
+        // with real content also deletes instantly (no blocking confirm
+        // dialog), but comes back with isEmpty: false so a real Undo can be
+        // offered here -- the file + its pin/color/chatgpt state are cached
+        // in main.js's process memory for a few seconds specifically for
+        // this.
+        const result = await ipcRenderer.invoke('delete-note', note.file).catch(err => {
+          console.error('Delete note failed:', err);
+          return null;
+        });
+
+        if (result?.ok && result.isEmpty === false) {
+          window.showToast('Note deleted', {
+            actionLabel: 'Undo',
+            // Longer than the toast component's ~2.8s default: this toast's
+            // action is the last chance to recover real content, so it gets
+            // more time than a plain "Copied!"-style confirmation would.
+            duration: 5000,
+            onAction: () => {
+              ipcRenderer.invoke('undo-delete-note', note.file).catch(err => {
+                console.error('Undo delete failed:', err);
+              });
+              // No manual re-render here -- main.js's undo-delete-note
+              // handler sends 'refresh-list' on success, same as every
+              // other mutation this window reacts to.
+            },
+          });
+        }
       });
       container.appendChild(div);
     });

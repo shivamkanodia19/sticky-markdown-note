@@ -344,7 +344,8 @@ body.only-mode #preview {
   #editor,
   #loading-indicator,
   .popover,
-  .dropdown-menu {
+  .dropdown-menu,
+  #toast-container {
     display: none !important;
   }
 
@@ -358,6 +359,14 @@ body.only-mode #preview {
   body {
     height: auto;
   }
+}
+
+/* Toast notifications (common.css defines #toast-container/.toast; this is
+   the one Note-window-specific override): sit above the persistent bottom
+   toolbar instead of underneath it, so a toast is never partially covered
+   by the Bold/Italic/List/Image bar. */
+:root {
+  --toast-bottom: calc(var(--toolbar-height) + var(--space-2));
 }
 
 /* Persistent bottom formatting toolbar (Bold/Italic/List/Image). Always

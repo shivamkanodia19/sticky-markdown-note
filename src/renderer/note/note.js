@@ -659,13 +659,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     moreMenu?.classList.toggle('hidden');
   });
 
+  // These three used to flip the clicked button's own textContent (e.g.
+  // "Copied!") for ~1200-1500ms. That text lived *inside* #more-menu, which
+  // moreMenu.classList.add('hidden') hides immediately on the same click --
+  // so the flipped text was never actually visible, just silently changing
+  // on a display:none element. Migrated to the shared toast (shared/
+  // toast.js) instead, which renders at the body level outside the menu, so
+  // the confirmation is now genuinely visible -- not just a second copy of
+  // the same mechanism.
   copyNoteBtn?.addEventListener('click', () => {
     const { clipboard } = require('electron');
     clipboard.writeText(editor.value);
     moreMenu?.classList.add('hidden');
-    const originalTitle = copyNoteBtn.textContent;
-    copyNoteBtn.textContent = 'Copied!';
-    setTimeout(() => { copyNoteBtn.textContent = originalTitle; }, 1200);
+    window.showToast('Copied to clipboard');
   });
 
   // Duplicate (Item 4): copies the current, live editor content into a new
@@ -675,30 +681,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   // original's pin/color/chatgpt-destination state).
   duplicateNoteBtn?.addEventListener('click', async () => {
     moreMenu?.classList.add('hidden');
-    const originalTitle = duplicateNoteBtn.textContent;
-    duplicateNoteBtn.textContent = 'Duplicating...';
     try {
       const result = await ipcRenderer.invoke('duplicate-note', editor.value);
-      duplicateNoteBtn.textContent = result?.ok ? 'Duplicated!' : originalTitle;
+      window.showToast(result?.ok ? 'Note duplicated' : "Couldn't duplicate note");
     } catch (err) {
       console.error('Duplicate note failed:', err);
-      duplicateNoteBtn.textContent = originalTitle;
+      window.showToast("Couldn't duplicate note");
     }
-    setTimeout(() => { duplicateNoteBtn.textContent = originalTitle; }, 1500);
   });
 
   exportPdfBtn?.addEventListener('click', async () => {
     moreMenu?.classList.add('hidden');
-    const originalTitle = exportPdfBtn.textContent;
-    exportPdfBtn.textContent = 'Exporting...';
     try {
       const result = await ipcRenderer.invoke('export-note-pdf');
-      exportPdfBtn.textContent = result?.ok ? 'Exported!' : originalTitle;
+      // A cancelled save dialog is an intentional no-op, not a failure --
+      // no toast either way, same as before (the old code silently reverted
+      // the button text back with no distinct "cancelled" message).
+      if (result?.canceled) return;
+      window.showToast(result?.ok ? 'Exported as PDF' : 'Export failed');
     } catch (err) {
       console.error('Export as PDF failed:', err);
-      exportPdfBtn.textContent = originalTitle;
+      window.showToast('Export failed');
     }
-    setTimeout(() => { exportPdfBtn.textContent = originalTitle; }, 1500);
   });
 
   // Closes any open popover/dropdown on an outside click -- both the color

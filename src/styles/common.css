@@ -258,3 +258,79 @@ svg.icon {
     flex-shrink: 0;
     display: block;
 }
+
+/* Toast notifications (shared/toast.js) -- bottom-of-window strip, used by
+   both the List and Note windows. Anchored to body (position:relative,
+   fills the viewport in both windows) rather than the viewport itself, same
+   "absolute over a relative ancestor" pattern note.css's #titlebar/
+   #loading-indicator already use, for the same reason: these are small,
+   frameless windows and a viewport-fixed element would paint outside
+   body's actual content box.
+   z-index sits above popovers/dropdown-menus (200) and the titlebar (99) so
+   a toast is never hidden behind either, but below the note window's
+   full-screen loading overlay (1000), which only appears for the brief
+   moment a note is first opening -- not a real conflict in practice.
+   --toast-bottom is a hook: the Note window (note.css) overrides it to sit
+   above its persistent bottom toolbar; the List window has no such toolbar,
+   so it just uses the plain --space-3 default set here. */
+:root {
+    --toast-bottom: var(--space-3);
+}
+
+#toast-container {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: var(--toast-bottom);
+    z-index: 500;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0 var(--space-3);
+    /* Let clicks fall through the empty space around a toast; each toast
+       re-enables pointer events on itself below. */
+    pointer-events: none;
+}
+
+.toast {
+    pointer-events: auto;
+    box-sizing: border-box;
+    max-width: 100%;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    background-color: var(--surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+    font-size: 13px;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.toast.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.toast-message {
+    flex: 1;
+    min-width: 0;
+}
+
+.toast-action {
+    flex-shrink: 0;
+    background-color: transparent;
+    color: var(--accent);
+    font-weight: 600;
+    padding: var(--space-1) var(--space-2);
+}
+
+.toast-action:hover {
+    background-color: var(--accent-soft);
+    color: var(--accent-hover);
+}
