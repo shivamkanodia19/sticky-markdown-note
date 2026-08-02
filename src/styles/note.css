@@ -38,7 +38,11 @@ body {
     box-sizing: border-box;
     background-color: var(--bg);
     color: var(--text-primary);
-    font-family: Georgia, "Iowan Old Style", Cambria, serif;
+    /* Item 4: same system sans-serif stack as the rest of the UI (body's
+       font-family in common.css) -- a serif default reads as a dated
+       "blog/WordPad" choice for a notes app; Notion/Craft/Bear all render
+       rendered-markdown content in the same sans used for their chrome. */
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
     font-size: 16px;
     line-height: 1.65;
 }
@@ -240,13 +244,31 @@ body.only-mode #preview {
   padding: var(--space-2);
   background-color: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  /* Item 2: bumped from the base --radius (8px) so floating chrome visibly
+     reads as "above" the base window, plus a two-layer shadow (a soft far
+     shadow + a tight near shadow) instead of the old flat single-layer
+     one. */
+  border-radius: var(--radius-popover);
+  box-shadow: var(--shadow-popover);
   -webkit-app-region: no-drag;
+  /* Item 5: opacity + translateY open/close transition. visibility is
+     included so a closed popover still leaves the tab order/accessibility
+     tree the same way `display: none` used to (opacity alone would not) --
+     it flips to `hidden` only at the end of the close transition (CSS's
+     documented behavior for animating visibility "forward"), and flips to
+     `visible` immediately when opening, so it's never mid-fade-in but
+     still un-interactive. */
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  transition: opacity 140ms ease-out, transform 140ms ease-out, visibility 140ms ease-out;
 }
 
 .popover.hidden {
-  display: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  pointer-events: none;
 }
 
 /* Specificity note: every rule below that has to beat common.css's
@@ -269,6 +291,7 @@ body.only-mode #preview {
   align-items: center;
   justify-content: center;
   color: #FFFFFF;
+  transition: transform 0.08s ease-out;
 }
 
 #titlebar .color-swatch[data-color="yellow"]   { background-color: var(--swatch-yellow); }
@@ -302,13 +325,22 @@ body.only-mode #preview {
   padding: var(--space-1);
   background-color: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  /* Item 2: same shadow/radius refinement as .popover above. */
+  border-radius: var(--radius-popover);
+  box-shadow: var(--shadow-popover);
   -webkit-app-region: no-drag;
+  /* Item 5: same open/close transition as .popover above. */
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  transition: opacity 140ms ease-out, transform 140ms ease-out, visibility 140ms ease-out;
 }
 
 .dropdown-menu.hidden {
-  display: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  pointer-events: none;
 }
 
 /* Same "#titlebar button" specificity fix as .color-swatch above -- without
@@ -327,6 +359,7 @@ body.only-mode #preview {
   font-size: 13px;
   font-weight: 400;
   white-space: nowrap;
+  transition: background-color 0.15s ease, color 0.15s ease, transform 0.08s ease-out;
 }
 
 #titlebar .dropdown-item:hover {
@@ -403,7 +436,7 @@ body.only-mode #preview {
   border: none;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, transform 0.08s ease-out;
 }
 
 .tool-btn:hover {

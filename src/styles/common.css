@@ -22,6 +22,22 @@
     --accent-hover-color: var(--accent-hover);
     --accent-button-text: #FFFFFF;
 
+    /* Elevation system (visual-polish batch): every hard `1px solid
+       var(--border)` surface separator/floating-panel shadow the app used
+       is being replaced with these. Same variable-swap pattern as --bg/
+       --surface/etc. above -- light values here, darker/more-opaque values
+       re-declared in body.dark-mode below, so both themes stay correct.
+       --shadow-separator: cheap, single-layer, no blur worth mentioning --
+       for flat chrome dividers (titlebar/toolbar) that used to be a hard
+       border. --shadow-popover: two-layer (a soft far shadow + a tight near
+       shadow) for floating chrome (popovers/dropdowns/toasts) so they read
+       as sitting above the base surface, not just outlined.
+       --radius-popover: floating chrome only -- deliberately larger than
+       the base --radius (8px) so it visibly reads as "above" the window. */
+    --shadow-separator: 0 1px 2px rgba(0, 0, 0, .06);
+    --shadow-popover: 0 4px 12px rgba(0, 0, 0, .10), 0 1px 3px rgba(0, 0, 0, .06);
+    --radius-popover: 12px;
+
     /* Spacing system */
     --space-1: 4px;
     --space-2: 8px;
@@ -99,6 +115,12 @@ body.dark-mode {
     --accent-color: var(--accent);
     --accent-hover-color: var(--accent-hover);
     --accent-button-text: #FFFFFF;
+
+    /* Dark-mode elevation: darker background means shadows need more
+       opacity to still read as a visible separation, not just weaker
+       versions of the light-mode values. */
+    --shadow-separator: 0 1px 2px rgba(0, 0, 0, .5);
+    --shadow-popover: 0 4px 12px rgba(0, 0, 0, .45), 0 1px 3px rgba(0, 0, 0, .3);
 }
 
 /* Base styles.
@@ -138,6 +160,21 @@ body {
        a non-scrolling, viewport-filling body behaves identically to fixed
        here either way. */
     position: relative;
+
+    /* Window-appearance motion (Item 5): a quiet fade+rise on first paint
+       instead of a hard pop-in. Deliberately a plain CSS animation on load
+       rather than a JS-driven class toggled at BrowserWindow 'show' time --
+       an IPC round-trip to gate visibility on a message from main.js would
+       make the window permanently blank if that message were ever missed
+       (a real regression risk for a background tray app), whereas this has
+       no failure mode: if the animation never runs, the element is simply
+       already at its unanimated default (opacity 1, no offset). */
+    animation: window-fade-in 140ms ease-out;
+}
+
+@keyframes window-fade-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 /* Titlebar styles -- shared shell for List / Note / Settings windows.
@@ -161,7 +198,12 @@ body {
     user-select: none;
     font-weight: 600;
     font-size: 13px;
-    border-bottom: 1px solid var(--border);
+    /* Item 1: shadow-based separator replacing the hard 1px border -- the
+       flat-bordered-rectangle look is the literal signature of Windows
+       2000/XP dialog chrome; a soft shadow reads as depth instead. Static
+       box-shadow, no blur filter/backdrop-filter, so this is exactly as
+       compositor-cheap as the border it replaces. */
+    box-shadow: var(--shadow-separator);
 }
 
 #titlebar > div {
@@ -182,12 +224,19 @@ body {
     border: none;
     border-radius: var(--radius-sm);
     cursor: pointer;
-    transition: background-color 0.15s ease, color 0.15s ease;
+    transition: background-color 0.15s ease, color 0.15s ease, transform 0.08s ease-out;
 }
 
 #titlebar button:hover {
     background-color: var(--hover);
     color: var(--text-primary);
+}
+
+/* Item 3: press feedback. Transform-only (GPU-composited, no repaint/
+   layout cost) so every titlebar icon button feels responsive on click
+   instead of only fading its background on hover. */
+#titlebar button:active {
+    transform: scale(.94);
 }
 
 #titlebar .title-btn {
@@ -224,12 +273,21 @@ button {
     border-radius: var(--radius-sm);
     cursor: pointer;
     font-size: 0.9em;
-    transition: background-color 0.15s ease, color 0.15s ease;
+    transition: background-color 0.15s ease, color 0.15s ease, transform 0.08s ease-out;
     -webkit-app-region: no-drag;
 }
 
 button:hover {
     background-color: var(--border);
+}
+
+/* Item 3: press feedback for every other button in the app (list row's
+   "New note", delete-btn, settings buttons, note window's color swatches
+   and "..." dropdown items -- anything that's a real <button> and doesn't
+   already set its own :active rule). #titlebar button:active above covers
+   the titlebar's own buttons the same way; this covers everything else. */
+button:active {
+    transform: scale(.94);
 }
 
 /* Primary action buttons (e.g. "New note") -- the one place besides
@@ -304,8 +362,12 @@ svg.icon {
     background-color: var(--surface);
     color: var(--text-primary);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+    /* Item 2: same two-layer shadow + larger radius as the note window's
+       popover/dropdown-menu (note.css) -- a toast is the same kind of
+       floating panel (a flat single-layer shadow before this batch), so it
+       gets the same "reads as above the base surface" treatment. */
+    border-radius: var(--radius-popover);
+    box-shadow: var(--shadow-popover);
     font-size: 13px;
     opacity: 0;
     transform: translateY(10px);
@@ -328,6 +390,32 @@ svg.icon {
     color: var(--accent);
     font-weight: 600;
     padding: var(--space-1) var(--space-2);
+}
+
+/* Item 6: prefers-reduced-motion support -- a real accessibility dependency
+   of every animation/transition this batch adds (window-fade-in above, the
+   popover/dropdown-menu open/close transition and button/icon :active
+   press-scale in note.css/list.css/here), AND every animation that already
+   existed before this batch (the screenshot-pending pulse, the save-pulse,
+   the loading spinner's spin, and this same file's toast slide-in). One
+   universal rule instead of hunting down each animation individually --
+   !important so it wins regardless of selector specificity or file/rule
+   order, and 0.001ms (not 0s) because some engines don't reliably fire
+   transitionend/animationend for a literal 0s duration -- toast.js's
+   dismiss() relies on transitionend to remove the DOM node (it does have a
+   400ms setTimeout fallback either way, but there's no reason to rely on
+   it). animation-iteration-count:1 also stops the spin/pulse loops from
+   running forever for someone who has this setting on specifically because
+   continuous motion bothers them. */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+        scroll-behavior: auto !important;
+    }
 }
 
 .toast-action:hover {

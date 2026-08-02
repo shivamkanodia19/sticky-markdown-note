@@ -1,7 +1,9 @@
 /* Toolbar styles */
 #toolbar {
     padding: var(--space-3) var(--space-4);
-    border-bottom: 1px solid var(--border);
+    /* Item 1: shadow-based separator, same rationale as #titlebar
+       (common.css) -- see that rule's comment. */
+    box-shadow: var(--shadow-separator);
     background: var(--bg);
     display: flex;
     align-items: center;
@@ -72,11 +74,19 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+    transition: background-color 0.15s ease, border-left-color 0.15s ease, transform 0.08s ease-out;
 }
 
 .note:hover {
     background: var(--hover);
     border-left-color: var(--accent);
+}
+
+/* Item 3: press feedback -- the row itself is the clickable target (opens
+   the note), not just its buttons, so it gets the same scale-down as every
+   other clickable element in this batch. */
+.note:active {
+    transform: scale(.94);
 }
 
 /* Row for the color dot + title, side by side (Item 1's list-row
