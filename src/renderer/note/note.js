@@ -451,6 +451,7 @@ function stopSnipPolling() {
   if (screenshotBtn) {
     screenshotBtn.classList.remove('pending');
     screenshotBtn.title = 'Screenshot';
+    screenshotBtn.setAttribute('aria-label', 'Screenshot');
   }
 }
 
@@ -485,6 +486,7 @@ async function captureScreenshot() {
   if (screenshotBtn) {
     screenshotBtn.classList.add('pending');
     screenshotBtn.title = 'Waiting for snip... (click to cancel)';
+    screenshotBtn.setAttribute('aria-label', 'Waiting for snip... (click to cancel)');
   }
 
   snipPollTimer = setInterval(() => {
@@ -568,9 +570,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   function applyPinState(pinned) {
     if (!pinToggleBtn) return;
     pinToggleBtn.classList.toggle('pinned', pinned);
-    pinToggleBtn.title = pinned
+    const label = pinned
       ? 'Pinned: note stays on top (click to unpin)'
       : 'Not pinned (click to keep on top)';
+    pinToggleBtn.title = label;
+    // Kept in sync with `title` (Item 2) so a screen reader hears the
+    // current pinned/unpinned state, not just a static "Pin" label.
+    pinToggleBtn.setAttribute('aria-label', label);
   }
 
   ipcRenderer.invoke('get-pin-state').then(applyPinState);
@@ -589,9 +595,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     chatgptTagged = tagged;
     if (!chatgptToggleBtn) return;
     chatgptToggleBtn.classList.toggle('tagged', tagged);
-    chatgptToggleBtn.title = tagged
+    const label = tagged
       ? 'Sent to ChatGPT: mirrored in Google Drive (click to stop)'
       : 'Send to ChatGPT (mirror to Google Drive)';
+    chatgptToggleBtn.title = label;
+    chatgptToggleBtn.setAttribute('aria-label', label);
   }
 
   ipcRenderer.invoke('get-destinations').then(destinations => {
@@ -613,7 +621,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function applyNoteColor(color) {
     document.body.setAttribute('data-color', color);
-    colorSwatches.forEach(sw => sw.classList.toggle('active', sw.dataset.color === color));
+    colorSwatches.forEach(sw => {
+      const isActive = sw.dataset.color === color;
+      sw.classList.toggle('active', isActive);
+      // aria-pressed reflects which swatch is the current note color, same
+      // "state visible to assistive tech, not just sighted users" goal as
+      // the pin/ChatGPT toggle labels above.
+      sw.setAttribute('aria-pressed', String(isActive));
+    });
   }
 
   ipcRenderer.invoke('get-note-color').then(applyNoteColor);
@@ -632,10 +647,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // "..." menu: Copy Note + Export as PDF (Item 7).
+  // "..." menu: Copy Note + Duplicate + Export as PDF.
   const moreMenuBtn = document.getElementById('more-menu-btn');
   const moreMenu = document.getElementById('more-menu');
   const copyNoteBtn = document.getElementById('copy-note-btn');
+  const duplicateNoteBtn = document.getElementById('duplicate-note-btn');
   const exportPdfBtn = document.getElementById('export-pdf-btn');
 
   moreMenuBtn?.addEventListener('click', e => {
@@ -650,6 +666,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     const originalTitle = copyNoteBtn.textContent;
     copyNoteBtn.textContent = 'Copied!';
     setTimeout(() => { copyNoteBtn.textContent = originalTitle; }, 1200);
+  });
+
+  // Duplicate (Item 4): copies the current, live editor content into a new
+  // note file (main.js's duplicate-note handler generates the new filename
+  // and opens it as its own window with fresh isNew=true defaults -- see
+  // that handler for why the copy deliberately does NOT inherit the
+  // original's pin/color/chatgpt-destination state).
+  duplicateNoteBtn?.addEventListener('click', async () => {
+    moreMenu?.classList.add('hidden');
+    const originalTitle = duplicateNoteBtn.textContent;
+    duplicateNoteBtn.textContent = 'Duplicating...';
+    try {
+      const result = await ipcRenderer.invoke('duplicate-note', editor.value);
+      duplicateNoteBtn.textContent = result?.ok ? 'Duplicated!' : originalTitle;
+    } catch (err) {
+      console.error('Duplicate note failed:', err);
+      duplicateNoteBtn.textContent = originalTitle;
+    }
+    setTimeout(() => { duplicateNoteBtn.textContent = originalTitle; }, 1500);
   });
 
   exportPdfBtn?.addEventListener('click', async () => {
@@ -810,6 +845,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     titlebar?.classList.add('blurred');
   });
 
+  // Saved-pulse indicator (Item 5): a brief, CSS-only titlebar flash that
+  // fires only once the debounced autosave's fs.writeFile callback actually
+  // confirms the write succeeded -- not on every keystroke, and not
+  // optimistically before the write completes. Restarting the animation on a
+  // rapid second save (edit, wait ~1s, edit again quickly) needs the class
+  // removed and re-added on a fresh frame; toggling it off then back on in
+  // the same synchronous tick would collapse into a no-op since the browser
+  // never repaints in between, so the reflow read (offsetWidth) forces that
+  // frame boundary.
+  function triggerSavePulse() {
+    if (!titlebar) return;
+    titlebar.classList.remove('save-pulse');
+    void titlebar.offsetWidth; // force reflow so re-adding the class restarts the animation
+    titlebar.classList.add('save-pulse');
+  }
+
   editor.addEventListener('input', () => {
     const text = editor.value;
     // Debounced (80ms) and skipped entirely in edit-only mode -- see
@@ -825,7 +876,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         clearTimeout(saveTimeout);
       }
       saveTimeout = setTimeout(() => {
-        fs.writeFile(currentPath, String(text), () => {});
+        fs.writeFile(currentPath, String(text), (err) => {
+          if (!err) triggerSavePulse();
+        });
         // Keep the Drive mirror in sync for as long as this note stays
         // tagged. main.js re-checks its own cached tag state before writing,
         // so this is safe to send unconditionally too, but skipping it here

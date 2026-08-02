@@ -151,9 +151,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (visibleNotes.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'empty-state';
-      empty.textContent = currentSearch
-        ? 'No notes match your search.'
-        : 'No notes yet. Click New note to get started.';
+      if (currentSearch) {
+        // Search-empty ("no results for this query") is a different state
+        // than "you have zero notes at all" -- text only, no glyph, same as
+        // before.
+        empty.textContent = 'No notes match your search.';
+      } else {
+        // Zero-notes empty state (Item 3): a small static sticky-note glyph
+        // above the existing text, matching the Lucide-style stroke icons
+        // used everywhere else in this app (stroke-width 1.75, round caps/
+        // joins, currentColor) -- inline SVG, no runtime cost.
+        empty.innerHTML = `
+          <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9l6-6V5a2 2 0 0 0-2-2Z"/>
+            <path d="M15 3v4a2 2 0 0 0 2 2h4"/>
+          </svg>
+          <div>No notes yet. Click New note to get started.</div>
+        `;
+      }
       container.appendChild(empty);
       return;
     }
@@ -173,7 +188,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 </div>
                 <div class="snippet">${snippetHtml}</div>
                 <div class="time">${new Date(note.mtime).toLocaleString()}</div>
-                <button class="delete-btn" title="Delete note">
+                <button class="delete-btn" title="Delete note" aria-label="Delete note">
                   <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>
                   </svg>

@@ -28,6 +28,19 @@ function updateThemeButtonText() {
     themeToggle.textContent = isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode';
 }
 
+// "Hide notes from taskbar" (Item 6). Persisted via the same electron-store
+// instance as theme/shortcuts (see main.js's get/set-skip-taskbar-notes
+// handlers) -- no separate settings-storage path.
+const skipTaskbarToggle = document.getElementById('skip-taskbar-toggle');
+
+ipcRenderer.invoke('get-skip-taskbar-notes').then(enabled => {
+    if (skipTaskbarToggle) skipTaskbarToggle.checked = !!enabled;
+});
+
+skipTaskbarToggle?.addEventListener('change', () => {
+    ipcRenderer.send('set-skip-taskbar-notes', skipTaskbarToggle.checked);
+});
+
 // Shortcut handling
 const defaultShortcuts = {
     'preview': { key: 'p', modifiers: ['ctrl'] },

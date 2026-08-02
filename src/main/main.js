@@ -199,6 +199,34 @@ function createTray() {
   tray.on('click', showMemoList);
 }
 
+// Applies pin ("always on top") state to a note window using a real, strong
+// z-order level instead of the previous no-level setAlwaysOnTop(bool) call.
+// Electron's setAlwaysOnTop(true) with no level argument uses the default
+// 'floating' level, which macOS/Windows both still let genuine OS-level
+// fullscreen surfaces (a video call, a game, a presentation) draw over --
+// defeating the entire point of "pin this note so it's always visible".
+// 'screen-saver' is Electron's documented highest window level, used
+// specifically for content that must stay visible above fullscreen apps.
+//
+// setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }) is the
+// second half of the same fix: without it, a pinned note is tied to whatever
+// virtual desktop/Space it was created on and won't follow the user to
+// another one. Per Electron's docs this is primarily a macOS/Linux concept
+// (Windows has no native "workspaces" API Electron hooks into for this
+// method), so it is a documented no-op on Windows rather than something that
+// needs an OS guard here -- safe and correct to call unconditionally on every
+// platform, including Windows.
+function applyPinState(win, pinned) {
+  if (!win || win.isDestroyed()) return;
+  if (pinned) {
+    win.setAlwaysOnTop(true, 'screen-saver');
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  } else {
+    win.setAlwaysOnTop(false);
+    win.setVisibleOnAllWorkspaces(false);
+  }
+}
+
 function createNoteWindow(notePath, position = null, isNew = false) {
   const fullPath = path.resolve(notePath); // Standardize path
 
@@ -232,15 +260,26 @@ function createNoteWindow(notePath, position = null, isNew = false) {
     height: savedBounds?.height || 400,
     x: position?.x ?? savedBounds?.x,
     y: position?.y ?? savedBounds?.y,
-    alwaysOnTop: pinned,
+    // Pin level/workspace-visibility is applied explicitly via
+    // applyPinState right below instead of the boolean alwaysOnTop option
+    // here, since the constructor option has no way to request the
+    // stronger 'screen-saver' z-order level that fix requires.
     frame: false,
     hasShadow: true,
     show: false, // Start hidden
+    // Opt-in only (Item 6, Settings): defaults to false (visible in
+    // taskbar, current/original behavior) unless Shivam explicitly turns
+    // this on in Settings. Only note windows respect this -- the Memo List
+    // window is deliberately never skip-taskbar (see createMainWindow),
+    // since it should always stay discoverable there.
+    skipTaskbar: store ? !!store.get('skipTaskbarNotes') : false,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
     },
   });
+
+  applyPinState(win, pinned);
 
   win.loadFile('src/renderer/note/note.html');
 
@@ -325,10 +364,17 @@ function createNoteWindow(notePath, position = null, isNew = false) {
   writeSessionNow();
 }
 
-function createNewNote(position = null) {
+// Shared by createNewNote and the "Duplicate" more-menu action (Item 4) --
+// both need a fresh, collision-free filename in notesDir following the same
+// naming convention (note-<ISO-timestamp-with-colons/dots-as-dashes>.md).
+function generateNewNoteFilePath() {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const fileName = `note-${timestamp}.md`;
-  const filePath = path.join(notesDir, fileName);
+  return path.join(notesDir, fileName);
+}
+
+function createNewNote(position = null) {
+  const filePath = generateNewNoteFilePath();
 
   // Create file with empty content
   fs.writeFileSync(filePath, '', 'utf-8');
@@ -565,7 +611,7 @@ ipcMain.handle('toggle-pin', event => {
   if (!win || win.isDestroyed()) return false;
 
   const newState = !win.isAlwaysOnTop();
-  win.setAlwaysOnTop(newState);
+  applyPinState(win, newState);
 
   if (win.notePath) {
     saveWindowState(win.notePath, { pinned: newState });
@@ -768,6 +814,44 @@ ipcMain.handle('export-note-pdf', async event => {
   }
 });
 
+// "Duplicate" more-menu action (Item 4). `content` is the renderer's current
+// (possibly still-debouncing) editor text -- same reason toggle-chatgpt-
+// destination and export-note-pdf take the live value rather than trusting
+// whatever was last flushed to disk. The copy is opened via the normal
+// createNoteWindow(..., isNew = true) path, which is deliberate: a genuinely
+// new file with no existing note-window-state.json entry means it picks up
+// the SAME defaults a brand-new note gets (pinned=true, color=yellow,
+// chatgpt-tagged=true) rather than inheriting the original's pin/color/
+// destination flags. A duplicate is a new note that happens to start with
+// the same text, not a linked clone of the original's settings.
+ipcMain.handle('duplicate-note', async (event, content) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed() || !win.notePath) return { ok: false, error: 'no window' };
+
+  const filePath = generateNewNoteFilePath();
+  const normalized = content ?? '';
+
+  try {
+    await fs.promises.writeFile(filePath, normalized, 'utf-8');
+  } catch (e) {
+    console.error('Duplicate note failed:', e);
+    return { ok: false, error: String(e) };
+  }
+
+  // New notes default to ChatGPT-tagged (see createNoteWindow) -- mirror the
+  // duplicate's content immediately, same as createNewNote does for a blank
+  // brand-new note, so the mirror exists from the moment the window does.
+  writeChatgptMirror(filePath, normalized).catch(() => {});
+
+  createNoteWindow(filePath, null, /* isNew */ true);
+
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+    mainWindow.webContents.send('refresh-list');
+  }
+
+  return { ok: true, filePath };
+});
+
 // Fire-and-forget mirror sync, called from the renderer's existing autosave
 // path right after it writes the primary file. Guarded by the cached
 // win.chatgptTagged flag so untagged notes never touch Drive.
@@ -811,6 +895,35 @@ app.on('ready', async () => {
 
   ipcMain.handle('get-current-theme', () => {
     return store.get('theme');
+  });
+
+  // "Hide from taskbar" setting (Item 6). Defaults to false/OFF -- the
+  // current, original behavior (note windows visible in the taskbar) --
+  // since some users rely on taskbar previews to find a specific note. This
+  // only ever applies to note windows, never the Memo List window (see
+  // createMainWindow, which never reads this setting), so the Memo List
+  // stays discoverable regardless. Persisted through the same electron-store
+  // instance every other setting (theme, shortcuts) already uses.
+  if (store.get('skipTaskbarNotes') === undefined) {
+    store.set('skipTaskbarNotes', false);
+  }
+
+  ipcMain.handle('get-skip-taskbar-notes', () => {
+    return !!store.get('skipTaskbarNotes');
+  });
+
+  ipcMain.on('set-skip-taskbar-notes', (event, value) => {
+    const newValue = !!value;
+    store.set('skipTaskbarNotes', newValue);
+
+    // Applies immediately to every already-open note window -- not just
+    // future ones -- without touching mainWindow/settingsWindow, which are
+    // never in this map.
+    Object.values(openNoteWindows).forEach(win => {
+      if (win && !win.isDestroyed()) {
+        win.setSkipTaskbar(newValue);
+      }
+    });
   });
 
   // Set default shortcuts if not exists

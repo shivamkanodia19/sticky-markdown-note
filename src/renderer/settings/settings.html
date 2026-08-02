@@ -9,7 +9,7 @@
     <body>
         <div id="titlebar">
             <span>Settings</span>
-            <button id="close-button" class="title-btn close-btn" title="Close">
+            <button id="close-button" class="title-btn close-btn" title="Close" aria-label="Close settings">
                 <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M18 6 6 18"/><path d="M6 6l12 12"/>
                 </svg>
@@ -21,6 +21,19 @@
                 <div class="setting-item">
                     <label>Dark/Light Mode</label>
                     <button id="theme-toggle">Toggle Dark/Light Mode</button>
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <h2>Window Behavior</h2>
+                <div class="setting-item">
+                    <label for="skip-taskbar-toggle">Hide notes from taskbar</label>
+                    <!-- Note windows only -- the Memo List window always stays
+                         visible/discoverable in the taskbar regardless of this
+                         setting (see main.js). Defaults to OFF/unchecked
+                         (current behavior); only takes effect once explicitly
+                         turned on here. -->
+                    <input type="checkbox" id="skip-taskbar-toggle" aria-label="Hide notes from taskbar">
                 </div>
             </div>
 

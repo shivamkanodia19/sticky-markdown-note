@@ -12,7 +12,7 @@
   </head>
   <body>
     <div id="titlebar">
-      <button id="new-note" class="title-btn" title="New note">
+      <button id="new-note" class="title-btn" title="New note" aria-label="New note">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 5v14"/><path d="M5 12h14"/>
         </svg>
@@ -23,56 +23,61 @@
            Edit-only/preview-only are still reachable via keyboard shortcuts
            (Ctrl+O / Ctrl+P by default) for anyone who wants them. -->
       <div>
-        <button id="pin-toggle" class="title-btn" title="Keep this note on top">
+        <!-- aria-label/title here are static fallbacks for the instant
+             before note.js's applyPinState runs; that function keeps both in
+             sync with real pin state afterward (pinned vs. unpinned) so a
+             screen reader always hears the current state, not just "Pin". -->
+        <button id="pin-toggle" class="title-btn" title="Keep this note on top" aria-label="Keep this note on top">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>
           </svg>
         </button>
-        <button id="chatgpt-toggle" class="title-btn" title="Send to ChatGPT (mirror to Google Drive)">
+        <button id="chatgpt-toggle" class="title-btn" title="Send to ChatGPT (mirror to Google Drive)" aria-label="Send to ChatGPT (mirror to Google Drive)">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 13v8"/><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="m8 17 4-4 4 4"/>
           </svg>
         </button>
         <div class="popover-anchor">
-          <button id="color-toggle" class="title-btn" title="Note color">
+          <button id="color-toggle" class="title-btn" title="Note color" aria-label="Note color" aria-haspopup="true">
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/>
               <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>
             </svg>
           </button>
           <div id="color-popover" class="popover hidden">
-            <button class="color-swatch" data-color="yellow" title="Yellow"><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
-            <button class="color-swatch" data-color="green" title="Green"><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
-            <button class="color-swatch" data-color="blue" title="Blue"><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
-            <button class="color-swatch" data-color="purple" title="Purple"><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
-            <button class="color-swatch" data-color="pink" title="Pink"><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
-            <button class="color-swatch" data-color="gray" title="Gray"><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
-            <button class="color-swatch" data-color="charcoal" title="Charcoal"><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
+            <button class="color-swatch" data-color="yellow" title="Yellow" aria-label="Yellow"><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
+            <button class="color-swatch" data-color="green" title="Green" aria-label="Green"><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
+            <button class="color-swatch" data-color="blue" title="Blue" aria-label="Blue"><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
+            <button class="color-swatch" data-color="purple" title="Purple" aria-label="Purple"><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
+            <button class="color-swatch" data-color="pink" title="Pink" aria-label="Pink"><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
+            <button class="color-swatch" data-color="gray" title="Gray" aria-label="Gray"><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
+            <button class="color-swatch" data-color="charcoal" title="Charcoal" aria-label="Charcoal"><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
           </div>
         </div>
-        <button id="screenshot-btn" class="title-btn" title="Screenshot">
+        <button id="screenshot-btn" class="title-btn" title="Screenshot" aria-label="Screenshot">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>
           </svg>
         </button>
-        <button id="open-list" class="title-btn" title="All notes">
+        <button id="open-list" class="title-btn" title="All notes" aria-label="Open all notes list">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/>
             <line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/>
           </svg>
         </button>
         <div class="popover-anchor">
-          <button id="more-menu-btn" class="title-btn" title="More">
+          <button id="more-menu-btn" class="title-btn" title="More" aria-label="More note actions" aria-haspopup="true">
             <svg class="icon" viewBox="0 0 24 24" fill="currentColor" stroke="none">
               <circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/>
             </svg>
           </button>
           <div id="more-menu" class="dropdown-menu hidden">
             <button id="copy-note-btn" class="dropdown-item">Copy Note</button>
+            <button id="duplicate-note-btn" class="dropdown-item">Duplicate</button>
             <button id="export-pdf-btn" class="dropdown-item">Export as PDF</button>
           </div>
         </div>
-        <button id="close-window" class="title-btn close-btn" title="Close" onclick="window.close()">
+        <button id="close-window" class="title-btn close-btn" title="Close" aria-label="Close note" onclick="window.close()">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <path d="M18 6 6 18"/><path d="M6 6l12 12"/>
           </svg>
@@ -89,38 +94,38 @@
     <div id="preview"></div>
 
     <div id="bottom-toolbar">
-      <button id="fmt-bold" class="tool-btn" title="Bold">
+      <button id="fmt-bold" class="tool-btn" title="Bold" aria-label="Bold">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <path d="M6 12h9a4 4 0 0 1 0 8H6z"/><path d="M6 4h7a4 4 0 0 1 0 8H6z"/>
         </svg>
       </button>
-      <button id="fmt-italic" class="tool-btn" title="Italic">
+      <button id="fmt-italic" class="tool-btn" title="Italic" aria-label="Italic">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <line x1="19" x2="10" y1="4" y2="4"/><line x1="14" x2="5" y1="20" y2="20"/><line x1="15" x2="9" y1="4" y2="20"/>
         </svg>
       </button>
-      <button id="fmt-list" class="tool-btn" title="Bullet list">
+      <button id="fmt-list" class="tool-btn" title="Bullet list" aria-label="Bullet list">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/>
           <line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/>
         </svg>
       </button>
-      <button id="fmt-checklist" class="tool-btn" title="Checklist">
+      <button id="fmt-checklist" class="tool-btn" title="Checklist" aria-label="Checklist">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <rect width="6" height="6" x="3" y="4" rx="1"/><path d="m3 17 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>
         </svg>
       </button>
-      <button id="fmt-underline" class="tool-btn" title="Underline">
+      <button id="fmt-underline" class="tool-btn" title="Underline" aria-label="Underline">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <path d="M6 4v6a6 6 0 0 0 12 0V4"/><line x1="4" x2="20" y1="20" y2="20"/>
         </svg>
       </button>
-      <button id="fmt-strike" class="tool-btn" title="Strikethrough">
+      <button id="fmt-strike" class="tool-btn" title="Strikethrough" aria-label="Strikethrough">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <path d="M16 4H9a3 3 0 0 0-2.83 4"/><path d="M14 12a4 4 0 0 1 0 8H6"/><line x1="4" x2="20" y1="12" y2="12"/>
         </svg>
       </button>
-      <button id="fmt-image" class="tool-btn" title="Insert image">
+      <button id="fmt-image" class="tool-btn" title="Insert image" aria-label="Insert image">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
         </svg>

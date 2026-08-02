@@ -430,6 +430,24 @@ body.only-mode #preview {
   pointer-events: none;
 }
 
+/* Saved-pulse indicator (Item 5): fires once the debounced autosave's
+   fs.writeFile callback confirms a successful write (see note.js's
+   triggerSavePulse) -- a quiet, brief confirmation that an edit actually
+   persisted to disk, not an alert. Animates box-shadow + brightness only, so
+   nothing shifts layout; 180ms total, same understated visual weight as the
+   screenshot-pending pulse above but a single short flash instead of an
+   infinite loop, since this confirms a completed action rather than an
+   in-progress wait. */
+#titlebar.save-pulse {
+  animation: save-pulse 180ms ease-out;
+}
+
+@keyframes save-pulse {
+  0% { box-shadow: 0 0 0 0 var(--accent-soft); filter: brightness(1); }
+  40% { box-shadow: 0 0 0 3px var(--accent-soft); filter: brightness(1.06); }
+  100% { box-shadow: 0 0 0 0 var(--accent-soft); filter: brightness(1); }
+}
+
 /* Loading Indicator Styles.
    position:absolute (not fixed) for the same rounded-corner-clipping reason
    documented on #titlebar above -- this one only shows briefly while a note
