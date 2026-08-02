@@ -50,7 +50,10 @@ const stateFilePath = path.join(app.getPath('userData'), 'note-window-state.json
 // Electron's default userData folder and not the vault -- kept independent
 // so this app stays simple and an AI agent can read notes here directly
 // instead of the vault modeling sticky-note capture.
-const notesDir = 'C:\\Users\\shiva\\Sticky Notes';
+// STICKY_NOTES_DIR is a test-only escape hatch (isolated automated test runs
+// need a throwaway notes folder instead of the real one below) -- unset in
+// every normal launch, so production behavior is unchanged.
+const notesDir = process.env.STICKY_NOTES_DIR || 'C:\\Users\\shiva\\Sticky Notes';
 if (!fs.existsSync(notesDir)) fs.mkdirSync(notesDir, { recursive: true });
 
 // "Send to ChatGPT" destination: mirrors a tagged note's content into the

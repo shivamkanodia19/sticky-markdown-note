@@ -10,41 +10,49 @@ body {
     flex-direction: column;
 }
 
-/* Editor and Preview panes.
-   The titlebar floats over these (see #titlebar rules below), so both panes
-   carry padding-top: var(--titlebar-height) to reserve space for it instead
-   of the old hardcoded 40px (titlebar is actually 36px -- common.css
-   --titlebar-height is now the single source of truth for both). */
-#editor {
-    width: 100%;
-    box-sizing: border-box;
-    font-family: ui-monospace, "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
-    font-size: 15px;
-    line-height: 1.6;
-    padding: var(--space-4);
-    padding-top: var(--titlebar-height);
-    padding-bottom: var(--toolbar-height);
-    resize: none;
-    background-color: var(--surface);
-    color: var(--text-primary);
-    border: none;
-}
-
+/* #preview: the single editable surface (architecture change). It used to
+   be a read-only rendered view sitting below a raw-markdown <textarea>;
+   now it IS the textarea -- a contenteditable region that's simultaneously
+   the WYSIWYG display and the thing the user types into. The titlebar
+   floats over it (see #titlebar rules below), so it carries
+   padding-top: var(--titlebar-height) to reserve space for it, same as the
+   old editor/preview panes did. */
 #preview {
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    flex: 1;
     padding: var(--space-5);
     padding-top: var(--titlebar-height);
     padding-bottom: var(--toolbar-height);
     overflow-y: auto;
-    box-sizing: border-box;
     background-color: var(--bg);
     color: var(--text-primary);
-    /* Item 4: same system sans-serif stack as the rest of the UI (body's
+    /* Same system sans-serif stack as the rest of the UI (body's
        font-family in common.css) -- a serif default reads as a dated
        "blog/WordPad" choice for a notes app; Notion/Craft/Bear all render
        rendered-markdown content in the same sans used for their chrome. */
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
     font-size: 16px;
     line-height: 1.65;
+    /* contenteditable elements don't get a native focus ring the way a
+       textarea/input does, but set this explicitly anyway rather than rely
+       on that -- a stray browser-default outline here would look like a
+       rendering bug, not a focus indicator, given the rest of this window
+       has no such affordance either. */
+    outline: none;
+    cursor: text;
+}
+
+/* Empty-note placeholder. Replaces the old <textarea placeholder="...">
+   attribute, which had no contenteditable equivalent. Driven by
+   note.js clearing a lone leftover <br> (Chrome's default residue when a
+   contenteditable is emptied by deleting everything) so :empty actually
+   matches. */
+#preview:empty::before {
+    content: 'Write here...';
+    color: var(--text-secondary);
+    pointer-events: none;
 }
 
 #preview img {
@@ -65,34 +73,6 @@ body {
 
 #preview code {
     font-family: ui-monospace, "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
-}
-
-/* View Mode Styles */
-#editor, #preview {
-    flex: 1;
-    height: auto;
-}
-
-/* "Split" view stacks editor above preview (this app's windows are small --
-   400px wide by default -- so a true side-by-side split leaves each pane too
-   narrow to be usable; stacking is the existing, working behavior). A
-   divider border between the two panes satisfies the "editor divided from
-   preview by a border" requirement without that width regression. */
-body.both-mode #editor,
-body.both-mode #preview {
-    height: 50%;
-    display: block;
-}
-
-body.both-mode #editor {
-    border-bottom: 1px solid var(--border);
-}
-
-body.only-mode #editor,
-body.only-mode #preview {
-    flex: 1;
-    height: auto;
-    display: block;
 }
 
 /* Markdown Table Styles */
@@ -374,7 +354,6 @@ body.only-mode #preview {
 @media print {
   #titlebar,
   #bottom-toolbar,
-  #editor,
   #loading-indicator,
   .popover,
   .dropdown-menu,

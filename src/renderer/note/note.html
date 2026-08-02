@@ -90,8 +90,14 @@
       <div class="loading-text">Loading...</div>
     </div>
 
-    <textarea id="editor" placeholder="Write here..."></textarea>
-    <div id="preview"></div>
+    <!-- Single editable surface (architecture change): the old raw-markdown
+         <textarea id="editor"> is gone. #preview is now BOTH what the user
+         sees and what they type into directly -- true WYSIWYG over a
+         contenteditable region, not two synced representations. Markdown is
+         still the on-disk format: note.js converts markdown -> HTML once on
+         load (marked) and serializes this DOM back to markdown on save
+         (turndown), debounced the same way the old autosave was. -->
+    <div id="preview" contenteditable="true" spellcheck="false"></div>
 
     <div id="bottom-toolbar">
       <button id="fmt-bold" class="tool-btn" title="Bold" aria-label="Bold">

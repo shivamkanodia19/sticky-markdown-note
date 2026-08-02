@@ -1,70 +1,36 @@
+// checkbox.js
+//
+// Single-surface architecture change: checkboxes used to be parsed out of
+// raw markdown text and custom-rendered/toggled by rewriting that raw
+// source (see the old updateCheckboxState/handleCheckboxChange, now gone).
+// Now #preview is the live, directly-editable DOM -- a checkbox is just a
+// real <input type="checkbox"> living in that DOM, and toggling it IS the
+// state change (nothing to sync back from a separate raw-text buffer).
+//
+// The only thing this module still owns is the marked renderer override that
+// turns a GFM task-list marker ("- [ ] "/"- [x] ") into that real checkbox
+// on load. contenteditable="false" on the <input> itself is what makes a
+// checkbox inside a contenteditable region behave correctly: a click still
+// toggles it (checkboxes handle their own click/keyboard toggling natively,
+// independent of contenteditable), but the caret can't be placed *inside*
+// it and typing can't merge text into it -- verified live (see note.js's
+// checklist Enter-key handling and the worktree's manual test notes).
 const marked = require('marked');
-const fs = require('fs');
 
 class CheckboxManager {
   constructor() {
     this.renderer = new marked.Renderer();
     this.renderer.checkbox = (checked) => {
-      return `<input type="checkbox" ${checked ? 'checked' : ''}>`;
+      return `<input type="checkbox" contenteditable="false"${checked ? ' checked' : ''}>`;
     };
   }
 
-  // Convert markdown to checkbox HTML
+  // Convert markdown to HTML, with GFM task-list items rendered as real,
+  // toggleable checkbox inputs instead of marked's default plain-text
+  // "[ ]"/"[x]" fallback.
   renderCheckboxes(markdown) {
     return marked.parse(markdown, { renderer: this.renderer });
   }
-
-  // Partial update when checkbox state changes
-  updateCheckboxState(checkbox, editor, preview) {
-    const checkboxes = Array.from(preview.querySelectorAll('input[type="checkbox"]'));
-    const idx = checkboxes.indexOf(checkbox);
-    if (idx === -1) return;
-
-    const text = editor.value;
-    const lines = text.split('\n');
-    let checkboxLineIdx = -1;
-    let found = 0;
-
-    // Find the line of the changed checkbox
-    for (let i = 0; i < lines.length; i++) {
-      if (/^\s*[-+*] \[[ x]\]/.test(lines[i]) || /^\s*\d+\. \[[ x]\]/.test(lines[i])) {
-        if (found === idx) {
-          checkboxLineIdx = i;
-          break;
-        }
-        found++;
-      }
-    }
-    if (checkboxLineIdx === -1) return;
-
-    // Update checkbox state
-    const indent = lines[checkboxLineIdx].match(/^\s*/)[0];
-    const bullet = lines[checkboxLineIdx].match(/^\s*[-+*]|\d+\./)[0];
-    const newLine = lines[checkboxLineIdx].replace(
-      /^\s*[-+*] \[[ x]\]|^\s*\d+\. \[[ x]\]/,
-      `${indent}${bullet} [${checkbox.checked ? 'x' : ' '}]`
-    );
-    lines[checkboxLineIdx] = newLine;
-
-    // Update editor and preview
-    editor.value = lines.join('\n');
-    
-    // Manually trigger the editor's input event to update the preview.
-    editor.dispatchEvent(new Event('input'));
-
-    return lines.join('\n');
-  }
-
-  handleCheckboxChange(event, editor, preview, currentPath) {
-    if (event.target.type !== 'checkbox') return;
-
-    const updatedContent = this.updateCheckboxState(event.target, editor, preview);
-    
-    // Save only if file is open
-    if (currentPath && updatedContent) {
-      fs.writeFile(currentPath, updatedContent, () => {});
-    }
-  }
 }
 
-module.exports = CheckboxManager; 
+module.exports = CheckboxManager;

@@ -4,6 +4,7 @@ const { marked } = require('marked');
 const fs = require('fs');
 const path = require('path');
 const CheckboxManager = require('./checkbox');
+const TurndownService = require('turndown');
 
 // katex is heavy (the module itself plus a ~30-file font/CSS payload) and
 // most notes never contain math. Lazy-require it only the first time a note
@@ -42,6 +43,15 @@ let currentFontSize = defaultFontSize;
 let userImagesDir = null; // User image save path
 let appRootPath = null; // Variable to store the app root path
 
+// The contenteditable surface and titlebar, and the debounced-save state
+// machine around them. Module-scoped (assigned once DOMContentLoaded fires,
+// below) rather than local to that closure, because insertImageBuffer/
+// captureScreenshot -- which need to read/insert into #preview and trigger a
+// save -- are also module-scope functions, not nested inside it.
+let preview = null;
+let titlebar = null;
+let saveTimeout = null;
+
 // "Send to ChatGPT" destination state for the note currently open in this
 // window. Declared at module scope (not inside the DOMContentLoaded closure)
 // because handleImagePaste, below, also needs to read it and lives outside
@@ -69,12 +79,12 @@ ipcRenderer.on('theme-changed', (event, theme) => {
 function matchesShortcut(e, shortcut) {
     const isMac = process.platform === 'darwin';
     const modifierKey = isMac ? e.metaKey : e.ctrlKey;
-    
+
     // Check modifiers
     if (shortcut.modifiers.includes('ctrl') && !modifierKey) return false;
     if (shortcut.modifiers.includes('shift') && !e.shiftKey) return false;
     if (shortcut.modifiers.includes('alt') && !e.altKey) return false;
-    
+
     // Check key
     return e.key.toLowerCase() === shortcut.key;
 }
@@ -88,7 +98,7 @@ class OrphanedImageManager {
   // Check if an image file is in use
   isImageInUse(markdownImagePath) {
     if (!userImagesDir) return false; // Cannot check if userImagesDir is not set
-    
+
     // Use the base directory where all notes are stored
     const notesRootPath = path.dirname(userImagesDir);
     if (!fs.existsSync(notesRootPath)) return false;
@@ -135,7 +145,7 @@ class OrphanedImageManager {
 
     // 4. Path encoded with encodePathSpecialChars (additional handling for brackets, etc.)
     possiblePathPatterns.push(escapeRegExp(encodePathSpecialChars(normalizedRawPath)));
-    
+
     // Add 'file:///' and 'file://' prefixes to each pattern to create final patterns
     const finalRegexPatterns = [];
     for (const pattern of possiblePathPatterns) {
@@ -213,7 +223,7 @@ function encodePathSpecialChars(pathStr) {
 // Function to convert app-asset:/// links to file:// links
 async function convertAppAssetLinks(content) {
   if (!content) return content;
-  
+
   // Find app-asset:/// links and convert them to file:// links
   return content.replace(/!\[([^\]]*)\]\(app-asset:\/\/\/([^)]+)\)/g, (match, alt, assetPath) => {
     // Extract actual file path from app-asset path
@@ -222,6 +232,193 @@ async function convertAppAssetLinks(content) {
     const filePath = `file:///${imagePath.replace(/\\/g, '/')}`;
     return `![${alt}](${filePath})`;
   });
+}
+
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+});
+
+// Create global renderer instance
+const checkboxManager = new CheckboxManager();
+
+// Function to check if markdown contains math expressions
+function hasMathExpression(markdown) {
+  return /\$(.+?)\$/.test(markdown);
+}
+
+// Load-time markdown -> HTML conversion. This now runs exactly ONCE per
+// note open (see the 'load-note' handler below), not on every keystroke --
+// the single biggest performance change in this rewrite. Typing itself is
+// native contenteditable editing with zero parse cost; the only other
+// non-trivial work is the debounced save serialization (turndownToMarkdown,
+// below), same debounce pattern the old autosave already used.
+function renderMathInMarkdown(markdown) {
+  // Render checkboxes
+  let html = checkboxManager.renderCheckboxes(markdown);
+
+  // Render math expressions only if they exist. Both the katex module and
+  // its CSS are lazy-loaded right here, on first actual use, not up front.
+  if (hasMathExpression(markdown)) {
+    ensureKatexCss();
+    const k = getKatex();
+    html = html.replace(/\$(.+?)\$/g, (_, expr) => {
+      try {
+        return k.renderToString(expr, { throwOnError: false });
+      } catch (err) {
+        return `<code>${expr}</code>`;
+      }
+    });
+  }
+
+  return html;
+}
+
+// HTML (the live contenteditable DOM) -> Markdown, for saving. Configured to
+// match the plain-markdown conventions this app already produced by hand
+// (ATX '#' headings, '-' bullets, fenced ``` code blocks) so a note edited
+// only with plain formatting round-trips as clean markdown with no stray
+// HTML -- verified live (see worktree test notes): a bold/italic/list/
+// checkbox-only note serializes with zero embedded HTML tags.
+function createTurndownService() {
+  const service = new TurndownService({
+    headingStyle: 'atx',
+    hr: '---',
+    bulletListMarker: '-',
+    codeBlockStyle: 'fenced',
+    fence: '```',
+    emDelimiter: '*',
+    strongDelimiter: '**',
+    linkStyle: 'inlined',
+  });
+
+  // GFM task-list items ("- [ ] "/"- [x] ") for the real <input
+  // type="checkbox"> elements checkbox.js's marked renderer produces.
+  //
+  // NOT using turndown-plugin-gfm's own taskListItems rule here: it only
+  // fires when the checkbox is a DIRECT child of <li> (node.parentNode.
+  // nodeName === 'LI'), but marked wraps list-item content in a <p> for any
+  // "loose" list (one with a blank line anywhere between its items, per
+  // CommonMark) -- verified live that this is exactly what happens for a
+  // real loaded note ("- [ ] first task" / "- [x] done task" followed by a
+  // blank-line-separated plain bullet group makes the WHOLE list loose, so
+  // marked emits <li><p><input type="checkbox">...</p></li>). With the
+  // plugin's strict rule, that checkbox's parent is <p>, not <li>, so the
+  // rule silently never matches and the checkbox is serialized as plain,
+  // marker-less list text on the very first save -- a real, observed data-
+  // loss bug this custom rule exists to close. Matching on the input
+  // itself, unconditional on its exact ancestor shape, is also simply
+  // correct for this app: a checkbox here always IS a task-list marker,
+  // there's no other use of <input type="checkbox"> in this editor.
+  service.addRule('taskListItem', {
+    filter: node => node.nodeName === 'INPUT' && node.type === 'checkbox',
+    // turndown calls replacement(content, node, options) -- content (the
+    // checkbox's own, always-empty inner content) is the FIRST argument,
+    // not node. Verified live that getting this backwards (a single-param
+    // `node =>` arrow, silently receiving `content` instead) makes
+    // `node.checked` read `''.checked` (undefined) and every single
+    // checkbox -- freshly toggled or loaded already-checked from disk --
+    // serialize as unchecked "- [ ] ", regardless of its real state.
+    replacement: (content, node) => (node.checked ? '[x]' : '[ ]') + ' ',
+  });
+
+  // Underline has no native Markdown syntax. This app has always passed
+  // raw <u>...</u> HTML straight through on the way in (marked renders
+  // inline HTML as-is; the old surround('<u>','</u>') toolbar button wrote
+  // exactly this) -- this rule preserves the same convention on the way
+  // back out. Chromium's execCommand('underline') was verified live in this
+  // Electron build to emit a plain <u> tag; the inline text-decoration span
+  // check is a defensive fallback only, not the observed behavior.
+  service.addRule('underline', {
+    filter: node => node.nodeName === 'U' ||
+      (node.nodeName === 'SPAN' && /text-decoration(-line)?\s*:\s*underline/i.test(node.getAttribute('style') || '')),
+    replacement: content => `<u>${content}</u>`,
+  });
+
+  // Strikethrough is written from scratch rather than pulling in
+  // turndown-plugin-gfm's own strikethrough rule: that rule emits a single
+  // tilde ('~text~'), but marked's GFM 'del' extension (this app's
+  // renderer) only recognizes the double-tilde CommonMark-GFM form
+  // ('~~text~~'). Using the plugin's version would silently lose the
+  // strikethrough on the very next reload -- exactly the kind of lossy
+  // round-trip this task calls out as the regression to avoid.
+  service.addRule('strikethrough', {
+    filter: ['s', 'strike', 'del'],
+    replacement: content => `~~${content}~~`,
+  });
+
+  return service;
+}
+
+const turndownService = createTurndownService();
+
+// Serializes the live contenteditable DOM to Markdown. Called only from the
+// debounced save path and a few explicit "save now" call sites (image
+// insert, checkbox toggle, duplicate/copy/mirror-toggle) -- never per
+// keystroke.
+function getCurrentMarkdown() {
+  return turndownService.turndown(preview);
+}
+
+// Saved-pulse indicator: a brief, CSS-only titlebar flash that fires only
+// once the debounced autosave's fs.writeFile callback actually confirms the
+// write succeeded -- not on every keystroke, and not optimistically before
+// the write completes.
+function triggerSavePulse() {
+  if (!titlebar) return;
+  titlebar.classList.remove('save-pulse');
+  void titlebar.offsetWidth; // force reflow so re-adding the class restarts the animation
+  titlebar.classList.add('save-pulse');
+}
+
+// `onSaved` runs only once the write has actually landed -- image insertion
+// needs this ordering guarantee (see saveImmediately below): the old code
+// ran its orphaned-image sweep from INSIDE the fs.writeFile callback,
+// specifically so the sweep's "which images does the file on disk still
+// reference" scan reads the just-written content, not whatever was there a
+// moment earlier. Calling the sweep synchronously right after a fire-and-
+// forget fs.writeFile (rather than from its callback) is a real, observed
+// race: the sweep runs before the async write lands, still sees the OLD
+// content with no reference to the brand-new image yet, and deletes the
+// image it was just asked to insert.
+function persistToDisk(markdown, onSaved) {
+  if (!currentPath) return;
+  fs.writeFile(currentPath, markdown, (err) => {
+    if (!err) triggerSavePulse();
+    if (onSaved) onSaved(err);
+  });
+  // Keep the Drive mirror in sync for as long as this note stays tagged.
+  // main.js re-checks its own cached tag state before writing, so this is
+  // safe to send unconditionally too, but skipping it here avoids a
+  // pointless IPC message for the common untagged case.
+  if (chatgptTagged) {
+    ipcRenderer.send('sync-chatgpt-mirror', markdown);
+  }
+}
+
+// Debounced autosave (1-second debounce, same window the old textarea
+// version used) -- the only per-edit cost is scheduling a timer; the actual
+// markdown serialization only runs once the debounce fires, not on every
+// keystroke (Item 7).
+function scheduleSave() {
+  if (!currentPath) return;
+  if (saveTimeout) clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(() => {
+    persistToDisk(getCurrentMarkdown());
+  }, 1000);
+}
+
+// Bypasses the debounce for edits that should feel instantly persisted
+// (image insert, checkbox toggle) -- mirrors the old insertImageBuffer's
+// synchronous-feeling direct fs.writeFile. `onSaved` (see persistToDisk)
+// lets a caller sequence work that depends on the write having landed.
+function saveImmediately(onSaved) {
+  if (!currentPath) { if (onSaved) onSaved(new Error('no currentPath')); return; }
+  if (saveTimeout) {
+    clearTimeout(saveTimeout);
+    saveTimeout = null;
+  }
+  persistToDisk(getCurrentMarkdown(), onSaved);
 }
 
 // Handle image paste
@@ -244,131 +441,29 @@ async function handleImagePaste(event) {
 }
 
 // Handle image insertion via the bottom toolbar's Image button (a file
-// picker, since there's no clipboard image in that flow).
-async function handleImageFilePick(file) {
+// picker, since there's no clipboard image in that flow). `atRange` is a
+// Range captured at click time (see fmtImageBtn's listener below) -- the
+// native file-picker dialog steals window focus while it's open, so the
+// selection captured before opening it is what actually gets restored once
+// a file comes back, not whatever (if anything) the selection collapsed to
+// in the meantime.
+async function handleImageFilePick(file, atRange) {
   if (!file) return;
   const buffer = await file.arrayBuffer();
   const imageBuffer = Buffer.from(buffer);
   const ext = (file.type.split('/')[1]) || path.extname(file.name).slice(1) || 'png';
-  await insertImageBuffer(imageBuffer, ext);
+  await insertImageBuffer(imageBuffer, ext, atRange);
 }
 
-marked.setOptions({
-  breaks: true,
-  gfm: true,
-});
-
-// Create global renderer instance
-const checkboxManager = new CheckboxManager();
-
-// Function to check if markdown contains math expressions
-function hasMathExpression(markdown) {
-  return /\$(.+?)\$/.test(markdown);
-}
-
-function renderMathInMarkdown(markdown) {
-  // Render checkboxes
-  let html = checkboxManager.renderCheckboxes(markdown);
-
-  // Render math expressions only if they exist. Both the katex module and
-  // its CSS are lazy-loaded right here, on first actual use, not up front.
-  if (hasMathExpression(markdown)) {
-    ensureKatexCss();
-    const k = getKatex();
-    html = html.replace(/\$(.+?)\$/g, (_, expr) => {
-      try {
-        return k.renderToString(expr, { throwOnError: false });
-      } catch (err) {
-        return `<code>${expr}</code>`;
-      }
-    });
-  }
-
-  return html;
-}
-
-function surround(before, after = before) {
-  const editor = document.getElementById('editor');
-  const text = editor.value;
-  const start = editor.selectionStart;
-  const end = editor.selectionEnd;
-  const selected = text.slice(start, end);
-
-  // Insert text at cursor position
-  const newText = text.slice(0, start) + before + selected + after + text.slice(end);
-  editor.value = newText;
-
-  // Dispatch the same 'input' event typing fires, so this goes through the
-  // normal debounced preview-render + autosave path instead of duplicating
-  // it (and instead of silently skipping the save, which direct preview
-  // writes used to do here).
-  editor.dispatchEvent(new Event('input'));
-
-  // Focus editor and set cursor position
-  editor.focus();
-  const newPosition = start + before.length;
-  editor.selectionStart = newPosition;
-  editor.selectionEnd = newPosition;
-
-  // Force cursor position update
-  setTimeout(() => {
-    editor.selectionStart = newPosition;
-    editor.selectionEnd = newPosition;
-  }, 0);
-}
-
-// Wraps each selected line (or just inserts a bare bullet at the cursor) in
-// a Markdown list marker. Shared by the bottom toolbar's List button.
-function insertBulletList() {
-  const editor = document.getElementById('editor');
-  const text = editor.value;
-  const start = editor.selectionStart;
-  const end = editor.selectionEnd;
-  const selected = text.slice(start, end);
-
-  const bulleted = selected
-    ? selected.split('\n').map(line => '- ' + line).join('\n')
-    : '- ';
-
-  const newText = text.slice(0, start) + bulleted + text.slice(end);
-  editor.value = newText;
-  editor.dispatchEvent(new Event('input'));
-
-  editor.focus();
-  const newPosition = start + bulleted.length;
-  editor.selectionStart = editor.selectionEnd = newPosition;
-}
-
-// Same shape as insertBulletList above, but with the GFM task-list marker
-// ('- [ ] ' instead of '- ') -- checkbox.js's marked renderer already
-// understands this syntax and renders/toggles it; this was purely a missing
-// UI trigger for it (Item 3).
-function insertChecklist() {
-  const editor = document.getElementById('editor');
-  const text = editor.value;
-  const start = editor.selectionStart;
-  const end = editor.selectionEnd;
-  const selected = text.slice(start, end);
-
-  const checklisted = selected
-    ? selected.split('\n').map(line => '- [ ] ' + line).join('\n')
-    : '- [ ] ';
-
-  const newText = text.slice(0, start) + checklisted + text.slice(end);
-  editor.value = newText;
-  editor.dispatchEvent(new Event('input'));
-
-  editor.focus();
-  const newPosition = start + checklisted.length;
-  editor.selectionStart = editor.selectionEnd = newPosition;
-}
-
-// Shared by paste-an-image and the toolbar's Image button: writes the image
-// next to the note, inserts a Markdown image link at the cursor, and saves.
-async function insertImageBuffer(imageBuffer, ext) {
-  const editor = document.getElementById('editor');
-  const preview = document.getElementById('preview');
-
+// Shared by paste-an-image, the toolbar's Image button, and the screenshot
+// flow: writes the image next to the note, inserts a real <img> element
+// into the contenteditable DOM at the cursor (or at `atRange` if the caller
+// captured one ahead of an async gap -- file picker, native snip overlay --
+// during which the live selection can't be trusted), saves immediately, and
+// sweeps orphaned images. turndown's default image rule converts the <img>
+// straight back into a Markdown image link on save; verified live that the
+// link still renders after a save+reload round-trip.
+async function insertImageBuffer(imageBuffer, ext, atRange = null) {
   const timestamp = Date.now();
   const random = Math.random().toString(36).substring(2, 8);
   const filename = `${timestamp}-${random}.${ext}`;
@@ -376,39 +471,40 @@ async function insertImageBuffer(imageBuffer, ext) {
 
   fs.writeFileSync(imagePath, imageBuffer);
 
-  // Pre-existing bug fixed in passing (not one of the 7 items, but Item 2's
-  // screenshot feature goes through this exact function, so it inherited
-  // the bug): the notes directory itself contains a space
-  // ("C:\Users\shiva\Sticky Notes"), and this path was never encoded before
-  // being embedded in the Markdown image link. CommonMark requires a bare
-  // (non-angle-bracket) link/image destination to contain no raw spaces --
-  // marked correctly refuses to parse it as an image and renders the literal
-  // "![...](...)" text instead. encodePathSpecialChars is already defined
-  // above for exactly this class of character (used when matching existing
-  // image links for orphan cleanup); reusing it here means every image
-  // link this app writes going forward actually renders.
+  // Same space/paren/bracket encoding the old raw-text insertion used (the
+  // notes directory itself contains a space -- "C:\Users\shiva\Sticky
+  // Notes" -- so this isn't optional).
   const absoluteImagePath = `file:///${encodePathSpecialChars(imagePath.replace(/\\/g, '/'))}`;
-  const imageMarkdown = `![${filename}](${absoluteImagePath})`;
 
-  const start = editor.selectionStart;
-  const end = editor.selectionEnd;
-  const text = editor.value;
-  editor.value = text.slice(0, start) + imageMarkdown + text.slice(end);
-  editor.selectionStart = editor.selectionEnd = start + imageMarkdown.length;
+  const img = document.createElement('img');
+  img.setAttribute('src', absoluteImagePath);
+  img.setAttribute('alt', filename);
 
-  preview.innerHTML = renderMathInMarkdown(editor.value);
-
-  if (currentPath) {
-    fs.writeFile(currentPath, String(editor.value), () => {
-      orphanedImageManager.cleanupOrphanedImages();
-    });
-    // This save path bypasses the debounced 'input' handler (no native
-    // input event dispatched), so the mirror sync has to be triggered
-    // explicitly too.
-    if (chatgptTagged) {
-      ipcRenderer.send('sync-chatgpt-mirror', String(editor.value));
-    }
+  const sel = window.getSelection();
+  let range = atRange || (sel && sel.rangeCount ? sel.getRangeAt(0) : null);
+  if (!range || !preview.contains(range.startContainer)) {
+    // No usable selection inside the note (window never had focus, or lost
+    // it) -- fall back to appending at the end rather than dropping the
+    // image silently.
+    range = document.createRange();
+    range.selectNodeContents(preview);
+    range.collapse(false);
   }
+  range.deleteContents();
+  range.insertNode(img);
+  range.setStartAfter(img);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  preview.focus();
+
+  // Cleanup has to wait for the write to actually land (see persistToDisk's
+  // onSaved) -- running it right after a fire-and-forget write is a real
+  // race that deletes the image this function just inserted, because the
+  // sweep would still see the OLD on-disk content with no reference to it
+  // yet. Verified live: this exact ordering bug caused a pasted image to
+  // vanish from disk seconds after being inserted.
+  saveImmediately(() => orphanedImageManager.cleanupOrphanedImages());
 }
 
 // Screenshot capture (v2 rework): triggers Windows' own native region-select
@@ -430,6 +526,7 @@ const SNIP_TIMEOUT_MS = 90000; // generous -- the user may take a while to drag-
 
 let snipPollTimer = null;
 let snipTimeoutTimer = null;
+let snipCapturedRange = null; // selection at the moment the snip overlay opened
 
 function isSnipPending() {
   return snipPollTimer !== null;
@@ -465,6 +562,16 @@ async function captureScreenshot() {
     return;
   }
 
+  // The native snip overlay takes OS focus away from this window for as
+  // long as the user is dragging a selection, which can silently collapse
+  // or move the contenteditable Selection. Capture it now, before that
+  // happens, so the eventual insert lands where the user actually clicked
+  // Screenshot from, not wherever focus/selection ends up afterward.
+  const sel = window.getSelection();
+  snipCapturedRange = (sel && sel.rangeCount > 0 && preview.contains(sel.anchorNode))
+    ? sel.getRangeAt(0).cloneRange()
+    : null;
+
   let result;
   try {
     result = await ipcRenderer.invoke('trigger-native-snip');
@@ -496,7 +603,7 @@ async function captureScreenshot() {
     if (beforePng && currentPng.equals(beforePng)) return; // unchanged, keep waiting
 
     stopSnipPolling();
-    insertImageBuffer(currentPng, 'png').catch(err => {
+    insertImageBuffer(currentPng, 'png', snipCapturedRange).catch(err => {
       console.error('Failed to insert captured snip:', err);
     });
   }, SNIP_POLL_INTERVAL_MS);
@@ -528,6 +635,68 @@ function hideLoadingIndicator() {
     }
 }
 
+// --- Selection/Range helpers shared by formatting commands, checklist
+// Enter-handling, and initial cursor placement. ---
+
+function placeCursorAtEnd(node) {
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  range.collapse(false);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function placeCursorAtStart(node) {
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  range.collapse(true);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+// Wraps the current selection in a plain inline tag (used for the
+// inline-code keyboard shortcut, which has no execCommand equivalent).
+// A no-op on a collapsed selection -- same "select something first" contract
+// the old raw-text version had for this shortcut.
+function wrapSelectionWithTag(tagName, preview) {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return false;
+  const range = sel.getRangeAt(0);
+  if (range.collapsed || !preview.contains(range.commonAncestorContainer)) return false;
+  const el = document.createElement(tagName);
+  el.appendChild(range.extractContents());
+  range.insertNode(el);
+  range.setStartAfter(el);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  return true;
+}
+
+function escapeHtmlForInsertHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Wraps the current selection's plain text in <pre><code> (the code-block
+// keyboard shortcut). Code blocks are plain text by nature, so this
+// deliberately flattens any nested formatting in the selection via
+// range.toString() rather than preserving it. Goes through
+// execCommand('insertHTML', ...) rather than a raw Range.insertNode for the
+// same reason the checklist button does (see fmtChecklistBtn below): a raw
+// insertNode can leave this block-level <pre> nested inside an active
+// inline-formatting element instead of breaking out of it, which then
+// serializes into invalid, marker-wrapped Markdown.
+function wrapSelectionInPreCode(preview) {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return false;
+  const range = sel.getRangeAt(0);
+  if (!preview.contains(range.commonAncestorContainer)) return false;
+  const text = range.collapsed ? '' : range.toString();
+  return document.execCommand('insertHTML', false, `<pre><code>${escapeHtmlForInsertHtml(text)}</code></pre>`);
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   // Set initial theme
   ipcRenderer.invoke('get-current-theme').then(theme => {
@@ -536,7 +705,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Get app root path
   appRootPath = await ipcRenderer.invoke('get-app-path');
-  
+
   const userDataPath = await ipcRenderer.invoke('get-user-data-path');
   const settingsPath = path.join(userDataPath, 'settings.json');
 
@@ -553,13 +722,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   console.log('DOMContentLoaded: Initial cleanup triggered.');
   orphanedImageManager.cleanupOrphanedImages();
 
-  const editor = document.getElementById('editor');
-  const preview = document.getElementById('preview');
-  const titlebar = document.getElementById('titlebar');
+  preview = document.getElementById('preview');
+  titlebar = document.getElementById('titlebar');
   const openListBtn = document.getElementById('open-list');
-  const viewEditBtn = document.getElementById('view-edit');
-  const viewPreviewBtn = document.getElementById('view-preview');
-  const viewSplitBtn = document.getElementById('view-split');
   const newNoteBtn = document.getElementById('new-note');
   const pinToggleBtn = document.getElementById('pin-toggle');
   const chatgptToggleBtn = document.getElementById('chatgpt-toggle');
@@ -588,9 +753,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // "Send to ChatGPT" destination toggle. `chatgptTagged` (module-scoped,
   // shared with handleImagePaste) mirrors the state main.js caches on the
-  // BrowserWindow -- kept here too so the autosave handler below can decide,
-  // on every keystroke, whether to also sync the Drive mirror without an
-  // extra IPC round-trip per character typed.
+  // BrowserWindow.
   function applyChatgptState(tagged) {
     chatgptTagged = tagged;
     if (!chatgptToggleBtn) return;
@@ -607,7 +770,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   chatgptToggleBtn?.addEventListener('click', async () => {
-    const newState = await ipcRenderer.invoke('toggle-chatgpt-destination', editor.value);
+    const newState = await ipcRenderer.invoke('toggle-chatgpt-destination', getCurrentMarkdown());
     applyChatgptState(newState);
   });
 
@@ -624,9 +787,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     colorSwatches.forEach(sw => {
       const isActive = sw.dataset.color === color;
       sw.classList.toggle('active', isActive);
-      // aria-pressed reflects which swatch is the current note color, same
-      // "state visible to assistive tech, not just sighted users" goal as
-      // the pin/ChatGPT toggle labels above.
       sw.setAttribute('aria-pressed', String(isActive));
     });
   }
@@ -659,30 +819,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     moreMenu?.classList.toggle('hidden');
   });
 
-  // These three used to flip the clicked button's own textContent (e.g.
-  // "Copied!") for ~1200-1500ms. That text lived *inside* #more-menu, which
-  // moreMenu.classList.add('hidden') hides immediately on the same click --
-  // so the flipped text was never actually visible, just silently changing
-  // on a display:none element. Migrated to the shared toast (shared/
-  // toast.js) instead, which renders at the body level outside the menu, so
-  // the confirmation is now genuinely visible -- not just a second copy of
-  // the same mechanism.
   copyNoteBtn?.addEventListener('click', () => {
     const { clipboard } = require('electron');
-    clipboard.writeText(editor.value);
+    clipboard.writeText(getCurrentMarkdown());
     moreMenu?.classList.add('hidden');
     window.showToast('Copied to clipboard');
   });
 
-  // Duplicate (Item 4): copies the current, live editor content into a new
-  // note file (main.js's duplicate-note handler generates the new filename
-  // and opens it as its own window with fresh isNew=true defaults -- see
-  // that handler for why the copy deliberately does NOT inherit the
-  // original's pin/color/chatgpt-destination state).
+  // Duplicate (Item 4): copies the current, live content (serialized to
+  // markdown) into a new note file (main.js's duplicate-note handler
+  // generates the new filename and opens it as its own window with fresh
+  // isNew=true defaults).
   duplicateNoteBtn?.addEventListener('click', async () => {
     moreMenu?.classList.add('hidden');
     try {
-      const result = await ipcRenderer.invoke('duplicate-note', editor.value);
+      const result = await ipcRenderer.invoke('duplicate-note', getCurrentMarkdown());
       window.showToast(result?.ok ? 'Note duplicated' : "Couldn't duplicate note");
     } catch (err) {
       console.error('Duplicate note failed:', err);
@@ -694,9 +845,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     moreMenu?.classList.add('hidden');
     try {
       const result = await ipcRenderer.invoke('export-note-pdf');
-      // A cancelled save dialog is an intentional no-op, not a failure --
-      // no toast either way, same as before (the old code silently reverted
-      // the button text back with no distinct "cancelled" message).
       if (result?.canceled) return;
       window.showToast(result?.ok ? 'Exported as PDF' : 'Export failed');
     } catch (err) {
@@ -718,69 +866,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     captureScreenshot().catch(err => console.error('Screenshot capture failed:', err));
   });
 
-  // viewMode is one of 'edit' | 'preview' | 'split'. Titlebar visibility is
-  // handled entirely by CSS (opacity, via the 'blurred' class below) so
-  // there's no display state to set here.
-  //
-  // Defaults to 'split' unconditionally (new AND existing notes) so a
-  // clickable, focusable <textarea> is always on screen the moment a note
-  // opens. This used to default to 'preview' for existing notes, which put
-  // a non-editable preview div where the cursor lands -- clicking did
-  // nothing because there was no editable element under the pointer. That
-  // was the actual cause of "hard to click in", not a styling issue.
-  let viewMode = 'split';
-  let saveTimeout = null;
-  let previewRenderTimeout = null;
-
-  // Checkbox click event listener (event delegation)
-  preview.addEventListener('change', (event) => {
-    checkboxManager.handleCheckboxChange(event, editor, preview, currentPath);
-  });
-
   function saveSettings() {
     const settings = { fontSize: currentFontSize };
     fs.writeFile(settingsPath, JSON.stringify(settings, null, 2), () => {});
-  }
-
-  // Debounced, and skipped entirely while the preview pane isn't visible
-  // (viewMode === 'edit') -- called from the per-keystroke input handler
-  // below, where a synchronous full markdown re-parse + DOM replace on
-  // every character was the main cause of typing lag.
-  function schedulePreviewRender(text) {
-    if (viewMode === 'edit') return;
-    if (previewRenderTimeout) clearTimeout(previewRenderTimeout);
-    previewRenderTimeout = setTimeout(() => {
-      preview.innerHTML = renderMathInMarkdown(text);
-    }, 80);
-  }
-
-  function updateView() {
-    if (viewMode === 'split') {
-      editor.style.display = 'block';
-      preview.style.display = 'block';
-    } else {
-      editor.style.display = viewMode === 'edit' ? 'block' : 'none';
-      preview.style.display = viewMode === 'preview' ? 'block' : 'none';
-    }
-    if (viewMode === 'edit') {
-      editor.focus();
-    } else {
-      // The preview may have missed renders while it was hidden in
-      // edit-only mode (schedulePreviewRender skips those). Refresh it
-      // immediately -- this is a one-off mode switch, not a per-keystroke
-      // call, so an undebounced render here is not a performance concern.
-      if (previewRenderTimeout) {
-        clearTimeout(previewRenderTimeout);
-        previewRenderTimeout = null;
-      }
-      preview.innerHTML = renderMathInMarkdown(editor.value);
-    }
-    document.body.classList.remove('both-mode', 'only-mode');
-    document.body.classList.add(viewMode === 'split' ? 'both-mode' : 'only-mode');
-
-    [viewEditBtn, viewPreviewBtn, viewSplitBtn].forEach(btn => btn?.classList.remove('active'));
-    const activeBtn = viewMode === 'edit' ? viewEditBtn : viewMode === 'preview' ? viewPreviewBtn : viewSplitBtn;
-    activeBtn?.classList.add('active');
   }
 
   try {
@@ -794,15 +882,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Ignore if settings file does not exist or is malformed
   }
 
-  editor.style.fontSize = `${currentFontSize}px`;
   preview.style.fontSize = `${currentFontSize}px`;
 
   ipcRenderer.on('load-note', async (event, notePath, isNew) => {
     currentPath = notePath;
-    // viewMode is already 'split' by default (see declaration above) for
-    // both new and existing notes -- nothing to branch on here anymore.
 
-    showLoadingIndicator(); // Show loading indicator before reading file
+    showLoadingIndicator();
 
     try {
       if (currentPath && fs.existsSync(currentPath)) {
@@ -812,12 +897,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             else resolve(data);
           });
         });
-        
+
         // Convert existing app-asset:/// links to file:// links
         const convertedContent = await convertAppAssetLinks(content);
-        editor.value = convertedContent;
+
+        // One-time markdown -> HTML parse (Item 7: the only per-load parse
+        // cost, not a per-keystroke one).
         preview.innerHTML = renderMathInMarkdown(convertedContent);
-        
+
         // If content was converted, save to file
         if (convertedContent !== content) {
           await new Promise((resolve, reject) => {
@@ -827,14 +914,22 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
           });
         }
+      } else {
+        preview.innerHTML = '';
       }
     } catch (error) {
       console.error('Error loading note:', error);
-      editor.value = '';
       preview.innerHTML = '';
     } finally {
-      hideLoadingIndicator(); // Hide loading indicator after everything is done
-      updateView();
+      hideLoadingIndicator();
+      // Land the cursor in the actual content immediately, rather than
+      // requiring an extra click to "find" the editable surface -- this is
+      // the direct fix for the "hard to click in" root cause called out in
+      // this task (a prior fix addressed the old textarea+preview model's
+      // version of the same bug; verified live here that the new
+      // single-surface model doesn't reintroduce it).
+      placeCursorAtEnd(preview);
+      preview.focus();
     }
   });
 
@@ -849,76 +944,96 @@ document.addEventListener('DOMContentLoaded', async () => {
     titlebar?.classList.add('blurred');
   });
 
-  // Saved-pulse indicator (Item 5): a brief, CSS-only titlebar flash that
-  // fires only once the debounced autosave's fs.writeFile callback actually
-  // confirms the write succeeded -- not on every keystroke, and not
-  // optimistically before the write completes. Restarting the animation on a
-  // rapid second save (edit, wait ~1s, edit again quickly) needs the class
-  // removed and re-added on a fresh frame; toggling it off then back on in
-  // the same synchronous tick would collapse into a no-op since the browser
-  // never repaints in between, so the reflow read (offsetWidth) forces that
-  // frame boundary.
-  function triggerSavePulse() {
-    if (!titlebar) return;
-    titlebar.classList.remove('save-pulse');
-    void titlebar.offsetWidth; // force reflow so re-adding the class restarts the animation
-    titlebar.classList.add('save-pulse');
-  }
-
-  editor.addEventListener('input', () => {
-    const text = editor.value;
-    // Debounced (80ms) and skipped entirely in edit-only mode -- see
-    // schedulePreviewRender above. This used to be a synchronous full
-    // markdown re-parse + DOM replace on every keystroke, which was the
-    // main cause of typing lag, especially since it ran even when the
-    // preview pane was display:none.
-    schedulePreviewRender(text);
-
-    // Auto-save (1-second debounce)
-    if (currentPath) {
-      if (saveTimeout) {
-        clearTimeout(saveTimeout);
-      }
-      saveTimeout = setTimeout(() => {
-        fs.writeFile(currentPath, String(text), (err) => {
-          if (!err) triggerSavePulse();
-        });
-        // Keep the Drive mirror in sync for as long as this note stays
-        // tagged. main.js re-checks its own cached tag state before writing,
-        // so this is safe to send unconditionally too, but skipping it here
-        // avoids a pointless IPC message for the common untagged case.
-        if (chatgptTagged) {
-          ipcRenderer.send('sync-chatgpt-mirror', String(text));
-        }
-      }, 1000);
-    }
+  // Checkbox toggle -- event delegation, same shape as the old
+  // preview.addEventListener('change', ...) except there's no raw-text
+  // rewrite step anymore: the DOM checkbox's checked state IS the state,
+  // so toggling it just needs to be persisted, immediately (matches the old
+  // checkbox handler's un-debounced fs.writeFile).
+  preview.addEventListener('change', (event) => {
+    if (event.target.type !== 'checkbox') return;
+    saveImmediately();
   });
 
+  // Any native editing operation inside the contenteditable surface --
+  // typing, execCommand-driven formatting, paste, list toggling -- fires
+  // 'input' here. This is the ONLY thing that runs per keystroke, and it
+  // does nothing more expensive than scheduling a debounced timer; there is
+  // no markdown parse, no innerHTML replace, no DOM diffing on this path.
+  preview.addEventListener('input', () => {
+    // Chrome leaves a lone <br> behind when a contenteditable is emptied by
+    // deleting all its content; clearing it out keeps the CSS
+    // #preview:empty placeholder (see note.css) actually working. Cheap
+    // exact-string check, not a tree walk.
+    if (preview.innerHTML === '<br>') preview.innerHTML = '';
+    scheduleSave();
+  });
+
+  // Finds the nearest ancestor <li> of the current selection, if any --
+  // used by both the checklist Enter-key handling and Tab indent/outdent
+  // below.
+  function ancestorListItem(sel) {
+    if (!sel || sel.rangeCount === 0) return null;
+    let node = sel.getRangeAt(0).startContainer;
+    while (node && node !== preview) {
+      if (node.nodeType === 1 && node.nodeName === 'LI') return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  // Checkbox-specific Enter handling (Item 5). The browser's native list
+  // continuation (Enter in a plain <li> creates a new <li>) doesn't know to
+  // carry a checkbox along -- it would just produce a checkbox-less line.
+  // This mirrors the old raw-text behavior instead: Enter on a non-empty
+  // checklist item continues with a fresh, unchecked checkbox; Enter on an
+  // EMPTY checklist item exits the list (same "double-Enter backs out of a
+  // list" shape the browser's own default list handling already has).
+  function handleChecklistEnter(li) {
+    const isEmpty = li.textContent.trim() === '';
+    const listEl = li.parentNode;
+
+    if (isEmpty) {
+      const p = document.createElement('p');
+      p.appendChild(document.createElement('br'));
+      if (listEl.nextSibling) {
+        listEl.parentNode.insertBefore(p, listEl.nextSibling);
+      } else {
+        listEl.parentNode.appendChild(p);
+      }
+      li.remove();
+      if (listEl.children.length === 0) listEl.remove();
+      placeCursorAtStart(p);
+      return;
+    }
+
+    const newLi = document.createElement('li');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.setAttribute('contenteditable', 'false');
+    newLi.appendChild(cb);
+    newLi.appendChild(document.createTextNode(' '));
+    li.after(newLi);
+    placeCursorAtEnd(newLi);
+  }
+
   document.addEventListener('keydown', e => {
-    const editorIsFocused = document.activeElement === editor;
-    const start = editor.selectionStart;
-    const end = editor.selectionEnd;
-    const text = editor.value;
-    const selected = text.slice(start, end);
+    const previewFocused = document.activeElement === preview || preview.contains(document.activeElement);
 
     // Check for custom shortcuts
     for (const [action, shortcut] of Object.entries(shortcuts)) {
         if (matchesShortcut(e, shortcut)) {
-            // Stop all event propagation
             e.preventDefault();
             e.stopPropagation();
             e.stopImmediatePropagation();
-            
-            // Execute the action
+
             switch (action) {
+                // View-mode switching no longer applies -- there is only
+                // one surface now (Item 1). Kept as recognized, harmless
+                // no-ops instead of removing the shortcut entirely, so a
+                // custom-bound key doesn't start doing something
+                // unexpected for anyone who had it muscle-memorized.
                 case 'preview':
-                    viewMode = 'split';
-                    updateView();
-                    break;
                 case 'toggle-view':
-                    // Toggle between edit-only and preview-only, exiting split.
-                    viewMode = (viewMode === 'split' || viewMode === 'preview') ? 'edit' : 'preview';
-                    updateView();
                     break;
                 case 'open-main':
                     ipcRenderer.send('open-main-window');
@@ -927,287 +1042,61 @@ document.addEventListener('DOMContentLoaded', async () => {
                     ipcRenderer.send('create-new-note-nearby');
                     break;
                 case 'bold':
-                    if (editorIsFocused) {
-                        const text = editor.value;
-                        const start = editor.selectionStart;
-                        const end = editor.selectionEnd;
-                        const selected = text.slice(start, end);
-                        
-                        // Check if we're inside a bold text
-                        const beforeText = text.slice(0, start);
-                        const afterText = text.slice(end);
-                        const beforeBold = beforeText.lastIndexOf('**');
-                        const afterBold = afterText.indexOf('**');
-                        
-                        if (beforeBold !== -1 && afterBold !== -1) {
-                            // We're inside a bold text, move cursor after the closing **
-                            editor.selectionStart = editor.selectionEnd = end + afterBold + 2;
-                        } else {
-                            // Start new bold text
-                            const newText = text.slice(0, start) + '**' + selected + '**' + text.slice(end);
-                            editor.value = newText;
-                            preview.innerHTML = renderMathInMarkdown(newText);
-                            editor.focus();
-                            editor.selectionStart = editor.selectionEnd = start + 2;
-                        }
-                    }
+                    if (previewFocused) { document.execCommand('bold'); scheduleSave(); }
                     break;
                 case 'italic':
-                    if (editorIsFocused) {
-                        const text = editor.value;
-                        const start = editor.selectionStart;
-                        const end = editor.selectionEnd;
-                        const selected = text.slice(start, end);
-                        
-                        // Check if we're inside italic text
-                        const beforeText = text.slice(0, start);
-                        const afterText = text.slice(end);
-                        const beforeItalic = beforeText.lastIndexOf('*');
-                        const afterItalic = afterText.indexOf('*');
-                        
-                        if (beforeItalic !== -1 && afterItalic !== -1) {
-                            // We're inside italic text, move cursor after the closing *
-                            editor.selectionStart = editor.selectionEnd = end + afterItalic + 1;
-                        } else {
-                            // Start new italic text
-                            const newText = text.slice(0, start) + '*' + selected + '*' + text.slice(end);
-                            editor.value = newText;
-                            preview.innerHTML = renderMathInMarkdown(newText);
-                            editor.focus();
-                            editor.selectionStart = editor.selectionEnd = start + 1;
-                        }
-                    }
+                    if (previewFocused) { document.execCommand('italic'); scheduleSave(); }
                     break;
                 case 'inline-code':
-                    if (editorIsFocused) {
-                        const text = editor.value;
-                        const start = editor.selectionStart;
-                        const end = editor.selectionEnd;
-                        const selected = text.slice(start, end);
-                        
-                        // Check if we're inside inline code
-                        const beforeText = text.slice(0, start);
-                        const afterText = text.slice(end);
-                        const beforeCode = beforeText.lastIndexOf('`');
-                        const afterCode = afterText.indexOf('`');
-                        
-                        if (beforeCode !== -1 && afterCode !== -1) {
-                            // We're inside inline code, move cursor after the closing `
-                            editor.selectionStart = editor.selectionEnd = end + afterCode + 1;
-                        } else {
-                            // Start new inline code
-                            const newText = text.slice(0, start) + '`' + selected + '`' + text.slice(end);
-                            editor.value = newText;
-                            preview.innerHTML = renderMathInMarkdown(newText);
-                            editor.focus();
-                            editor.selectionStart = editor.selectionEnd = start + 1;
-                        }
-                    }
+                    if (previewFocused && wrapSelectionWithTag('code', preview)) scheduleSave();
                     break;
                 case 'code-block':
-                    if (editorIsFocused) {
-                        const newText = text.slice(0, start) + '\n```\n' + selected + '\n```' + text.slice(end);
-                        editor.value = newText;
-                        preview.innerHTML = renderMathInMarkdown(newText);
-                        editor.focus();
-                        editor.selectionStart = editor.selectionEnd = start + 5;
-                    }
+                    if (previewFocused && wrapSelectionInPreCode(preview)) scheduleSave();
                     break;
                 case 'quote':
-                    if (editorIsFocused) {
-                        const quote = selected
-                            ? selected
-                                .split('\n')
-                                .map(line => '> ' + line)
-                                .join('\n')
-                            : '> ';
-                        const newText = text.slice(0, start) + quote + text.slice(end);
-                        editor.value = newText;
-                        preview.innerHTML = renderMathInMarkdown(newText);
-                        editor.focus();
-                        editor.selectionStart = editor.selectionEnd = start + quote.length;
-                    }
+                    if (previewFocused) { document.execCommand('formatBlock', false, 'blockquote'); scheduleSave(); }
                     break;
                 case 'heading':
-                    if (editorIsFocused && !e.shiftKey) {
-                        const heading = selected
-                            ? selected
-                                .split('\n')
-                                .map(line => '# ' + line)
-                                .join('\n')
-                            : '# ';
-                        const newText = text.slice(0, start) + heading + text.slice(end);
-                        editor.value = newText;
-                        preview.innerHTML = renderMathInMarkdown(newText);
-                        editor.focus();
-                        editor.selectionStart = editor.selectionEnd = start + heading.length;
-                    }
+                    if (previewFocused && !e.shiftKey) { document.execCommand('formatBlock', false, 'h1'); scheduleSave(); }
                     break;
                 case 'strikethrough':
-                    if (editorIsFocused && e.shiftKey) {
-                        const text = editor.value;
-                        const start = editor.selectionStart;
-                        const end = editor.selectionEnd;
-                        const selected = text.slice(start, end);
-                        
-                        // Check if we're inside strikethrough text
-                        const beforeText = text.slice(0, start);
-                        const afterText = text.slice(end);
-                        const beforeStrike = beforeText.lastIndexOf('~~');
-                        const afterStrike = afterText.indexOf('~~');
-                        
-                        if (beforeStrike !== -1 && afterStrike !== -1) {
-                            // We're inside strikethrough text, move cursor after the closing ~~
-                            editor.selectionStart = editor.selectionEnd = end + afterStrike + 2;
-                        } else {
-                            // Start new strikethrough text
-                            const newText = text.slice(0, start) + '~~' + selected + '~~' + text.slice(end);
-                            editor.value = newText;
-                            preview.innerHTML = renderMathInMarkdown(newText);
-                            editor.focus();
-                            editor.selectionStart = editor.selectionEnd = start + 2;
-                        }
-                    }
+                    if (previewFocused && e.shiftKey) { document.execCommand('strikeThrough'); scheduleSave(); }
                     break;
             }
             return;
         }
     }
 
-    // Handle Tab key for indentation
-    if (!editorIsFocused) return;
+    if (!previewFocused) return;
+
+    const sel = window.getSelection();
+
     if (e.key === 'Tab') {
         e.preventDefault();
-        const start = editor.selectionStart;
-        const end = editor.selectionEnd;
-        const text = editor.value;
-        
-        // Get the current line
-        const before = text.slice(0, start);
-        const after = text.slice(end);
-        const currentLineStart = before.lastIndexOf('\n') + 1;
-        const currentLineEnd = after.indexOf('\n') === -1 ? text.length : end + after.indexOf('\n');
-        const currentLine = text.slice(currentLineStart, currentLineEnd);
-        
-        // Check if we're in a list item
-        const isListItem = /^(\s*)([-*+]\s|\d+\.\s)/.test(currentLine);
-        
-        let newText;
-        if (e.shiftKey) {
-            // Unindent
-            if (isListItem) {
-                const match = currentLine.match(/^(\s*)([-*+]\s|\d+\.\s)(.*)/);
-                if (match) {
-                    const [, indent, bullet, content] = match;
-                    const newIndent = indent.length >= 4 ? indent.slice(4) : '';
-                    newText = text.slice(0, currentLineStart) + newIndent + bullet + content + text.slice(currentLineEnd);
-                    editor.value = newText;
-                    editor.selectionStart = editor.selectionEnd = start - 4;
-                }
-            } else {
-                const lines = text.slice(start, end).split('\n');
-                newText = lines
-                    .map(line => {
-                        if (line.startsWith('    ')) {
-                            return line.slice(4);
-                        } else if (line.startsWith('\t')) {
-                            return line.slice(1);
-                        }
-                        return line;
-                    })
-                    .join('\n');
-                editor.value = before + newText + after;
-                if (start === end) {
-                    editor.selectionStart = editor.selectionEnd = start - 4;
-                } else {
-                    editor.selectionStart = start;
-                    editor.selectionEnd = start + newText.length;
-                }
-            }
+        const li = ancestorListItem(sel);
+        if (li) {
+          document.execCommand(e.shiftKey ? 'outdent' : 'indent');
         } else {
-            // Indent
-            if (isListItem) {
-                const match = currentLine.match(/^(\s*)([-*+]\s|\d+\.\s)(.*)/);
-                if (match) {
-                    const [, indent, bullet, content] = match;
-                    newText = text.slice(0, currentLineStart) + indent + '    ' + bullet + content + text.slice(currentLineEnd);
-                    editor.value = newText;
-                    editor.selectionStart = editor.selectionEnd = start + 4;
-                }
-            } else {
-                const lines = text.slice(start, end).split('\n');
-                newText = lines.map(line => '    ' + line).join('\n');
-                editor.value = before + newText + after;
-                if (start === end) {
-                    editor.selectionStart = editor.selectionEnd = start + 4;
-                } else {
-                    editor.selectionStart = start;
-                    editor.selectionEnd = start + newText.length;
-                }
-            }
+          document.execCommand('insertText', false, '    ');
         }
-        
-        editor.dispatchEvent(new Event('input'));
+        scheduleSave();
         return;
     }
 
-    // Handle Enter key for lists
     if (e.key === 'Enter') {
-        const text = editor.value;
-        const start = editor.selectionStart;
-        const end = editor.selectionEnd;
-        const before = text.slice(0, start);
-        const after = text.slice(end);
-        const lines = before.split('\n');
-        const currentLine = lines[lines.length - 1];
-        
-        // Handle consecutive bullet points
-        const bulletMatch = currentLine.match(/^(\s*)([-*+]\s)/);
-        const numberMatch = currentLine.match(/^(\s*)(\d+\.\s)/);
-        const checkboxMatch = currentLine.match(/^(\s*)([-*+]|\d+\.)\s\[[ x]\]\s/);
-        
-        if (bulletMatch || numberMatch || checkboxMatch) {
-            e.preventDefault();
-            const match = bulletMatch || numberMatch || checkboxMatch;
-            const [, indent, bullet] = match;
-            
-            // If current line only contains a bullet point (no content)
-            if (currentLine.trim() === bullet.trim() || (checkboxMatch && currentLine.trim() === bullet.trim() + '[ ]')) {
-                // If bullet point is indented, unindent it
-                if (indent.length >= 4) {
-                    const newIndent = indent.slice(4);
-                    const newText = before.slice(0, -currentLine.length) + newIndent + bullet + '\n' + after;
-                    editor.value = newText;
-                    editor.selectionStart = editor.selectionEnd = start - 4;
-                } else {
-                    // Remove bullet point and add new line
-                    const newText = before.slice(0, -currentLine.length) + '\n' + after;
-                    editor.value = newText;
-                    editor.selectionStart = editor.selectionEnd = start - currentLine.length;
-                }
-            } else {
-                // Normal case: add bullet point to next line
-                let nextBullet = bullet;
-                if (numberMatch) {
-                    // For numbered lists, increment to the next number
-                    const currentNumber = parseInt(bullet);
-                    nextBullet = `${indent}${currentNumber + 1}. `;
-                } else {
-                    nextBullet = `${indent}${bullet}`;
-                }
-
-                // If current line has a checkbox, add checkbox to next line
-                if (checkboxMatch) {
-                    nextBullet += '[ ] ';
-                }
-
-                const newText = before + '\n' + nextBullet + after;
-                editor.value = newText;
-                editor.selectionStart = editor.selectionEnd = start + nextBullet.length + 1;
-            }
-            preview.innerHTML = renderMathInMarkdown(editor.value);
-            return;
+        const li = ancestorListItem(sel);
+        const checkbox = li && li.querySelector('input[type="checkbox"]');
+        // Only intercept Enter for a checklist item where the checkbox is
+        // that item's own direct marker (not one belonging to a nested
+        // sub-list), and let every other Enter (plain text, plain list
+        // items, headings, etc.) fall through to the browser's own native,
+        // already-correct contenteditable handling.
+        if (checkbox && checkbox.parentNode === li) {
+          e.preventDefault();
+          handleChecklistEnter(li);
+          scheduleSave();
         }
+        return;
     }
   });
 
@@ -1224,43 +1113,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     e => {
       const isMac = process.platform === 'darwin';
       const modifierKey = isMac ? e.metaKey : e.ctrlKey;
-      
+
       if (!modifierKey) return;
       e.preventDefault();
       currentFontSize += e.deltaY < 0 ? 1 : -1;
       currentFontSize = Math.max(fontSizeMin, Math.min(currentFontSize, fontSizeMax));
-      editor.style.fontSize = `${currentFontSize}px`;
       preview.style.fontSize = `${currentFontSize}px`;
       saveSettings();
     },
     { passive: false }
   );
 
-  viewEditBtn?.addEventListener('click', () => {
-    viewMode = 'edit';
-    updateView();
-  });
-
-  viewPreviewBtn?.addEventListener('click', () => {
-    viewMode = 'preview';
-    updateView();
-  });
-
-  viewSplitBtn?.addEventListener('click', () => {
-    viewMode = 'split';
-    updateView();
-  });
-
-  updateView();
-
   ipcRenderer.send('note-ready');
 
-  // Add image paste event listener
-  editor.addEventListener('paste', handleImagePaste);
+  // Add image paste event listener -- now on the contenteditable surface
+  // itself, since that's the only surface left.
+  preview.addEventListener('paste', handleImagePaste);
 
-  // Persistent bottom formatting toolbar (Bold/Italic/List/Image) --
-  // replaces the old edit/preview/split segmented control now that 'split'
-  // is always the default, real view (see viewMode declaration above).
+  // Persistent bottom formatting toolbar (Bold/Italic/List/Checklist/
+  // Underline/Strikethrough/Image) -- same seven controls as before this
+  // rewrite (Shivam's explicit call: keep the toolbar exactly this dense,
+  // no new Word/Docs-style additions). Rewired from surround()'s literal
+  // markdown-character insertion to act on the live selection/DOM via
+  // execCommand, since there's no raw text buffer left to splice into.
+  // Verified live in this Electron build: bold/italic/underline/
+  // strikeThrough/insertUnorderedList all apply correctly and visibly.
   const fmtBoldBtn = document.getElementById('fmt-bold');
   const fmtItalicBtn = document.getElementById('fmt-italic');
   const fmtListBtn = document.getElementById('fmt-list');
@@ -1270,24 +1147,53 @@ document.addEventListener('DOMContentLoaded', async () => {
   const fmtImageBtn = document.getElementById('fmt-image');
   const imageFileInput = document.getElementById('image-file-input');
 
-  fmtBoldBtn?.addEventListener('click', () => surround('**'));
-  fmtItalicBtn?.addEventListener('click', () => surround('*'));
-  fmtListBtn?.addEventListener('click', () => insertBulletList());
-  fmtChecklistBtn?.addEventListener('click', () => insertChecklist());
-  // Underline has no native Markdown syntax -- <u> is raw HTML passthrough,
-  // which marked renders as-is by default (same reason the checkbox
-  // renderer above emits raw <input> tags).
-  fmtUnderlineBtn?.addEventListener('click', () => surround('<u>', '</u>'));
-  // Ctrl+Shift+S (see main.js's default shortcuts) already drives its own
-  // toggle-aware strikethrough logic in the keydown handler above; this
-  // button uses the plainer surround() helper instead, matching Bold/
-  // Italic/Underline's mechanism as specified -- both end up producing the
-  // same '~~...~~' marked already renders.
-  fmtStrikeBtn?.addEventListener('click', () => surround('~~'));
-  fmtImageBtn?.addEventListener('click', () => imageFileInput?.click());
+  function runFormatCommand(command, value) {
+    preview.focus();
+    document.execCommand(command, false, value);
+    scheduleSave();
+  }
+
+  fmtBoldBtn?.addEventListener('click', () => runFormatCommand('bold'));
+  fmtItalicBtn?.addEventListener('click', () => runFormatCommand('italic'));
+  fmtListBtn?.addEventListener('click', () => runFormatCommand('insertUnorderedList'));
+  fmtUnderlineBtn?.addEventListener('click', () => runFormatCommand('underline'));
+  fmtStrikeBtn?.addEventListener('click', () => runFormatCommand('strikeThrough'));
+
+  // Checklist: inserts a fresh single-item task list at the cursor. There's
+  // no execCommand for this specific markup, so it goes through
+  // execCommand('insertHTML', ...) rather than a raw Range.insertNode --
+  // verified live that raw insertNode is unsafe here: if the cursor happens
+  // to sit inside an active inline-formatting run (e.g. right after
+  // toggling Bold with nothing typed since), insertNode drops the new
+  // block-level <ul> AS A CHILD of that inline element (invalid
+  // block-inside-inline nesting), which then serializes into garbled,
+  // marker-wrapped Markdown on save. execCommand's own insertion path
+  // handles breaking out of an inline context correctly; a raw DOM range
+  // does not. The browser also places the cursor right after inserted HTML
+  // automatically, landing exactly after the trailing space -- ready to
+  // type the item's text -- so no manual cursor placement is needed here.
+  fmtChecklistBtn?.addEventListener('click', () => {
+    preview.focus();
+    document.execCommand('insertHTML', false, '<ul><li><input type="checkbox" contenteditable="false"> </li></ul>');
+    scheduleSave();
+  });
+
+  // Insert-image button: opens a native file picker, so the current
+  // selection has to be captured BEFORE that dialog steals focus (same
+  // reasoning as the screenshot flow above).
+  let pendingImageRange = null;
+  fmtImageBtn?.addEventListener('click', () => {
+    const sel = window.getSelection();
+    pendingImageRange = (sel && sel.rangeCount > 0 && preview.contains(sel.anchorNode))
+      ? sel.getRangeAt(0).cloneRange()
+      : null;
+    imageFileInput?.click();
+  });
   imageFileInput?.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     imageFileInput.value = ''; // allow picking the same file again later
-    await handleImageFilePick(file);
+    const atRange = pendingImageRange;
+    pendingImageRange = null;
+    await handleImageFilePick(file, atRange);
   });
 });
