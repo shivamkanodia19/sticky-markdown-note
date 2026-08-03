@@ -1,3 +1,15 @@
+/* Recently Deleted titlebar toggle -- active state mirrors note.css's
+   "#titlebar .title-btn#pin-toggle.pinned" (filled --accent, white icon),
+   including the same ID-selector-over-class-selector specificity fix that
+   comment documents (#titlebar button's own background-color/color rules in
+   common.css are written with an #titlebar ID selector, so a plain
+   ".active" class alone can't win against them without matching that
+   specificity here too). */
+#titlebar .title-btn#trash-button.active {
+    background-color: var(--accent) !important;
+    color: #FFFFFF !important;
+}
+
 /* Toolbar styles */
 #toolbar {
     padding: var(--space-3) var(--space-4);
@@ -69,17 +81,30 @@
     position: relative;
     padding: var(--space-3) var(--space-4);
     border-bottom: 1px solid var(--border);
-    border-left: 3px solid transparent;
+    /* Item 1: bold color presence. Width bumped from the old 3px hover-only
+       accent hairline to a 4px stripe that's ALWAYS colored (per-note,
+       via data-color below) rather than only appearing on hover -- the goal
+       is the list reading as a pile of colored notes at rest, not just on
+       interaction. Reuses the same --swatch-* variables as the color-dot
+       and the note window's own color-picker swatches -- no new colors. */
+    border-left: 4px solid transparent;
     cursor: pointer;
     display: flex;
     flex-direction: column;
     gap: 2px;
-    transition: background-color 0.15s ease, border-left-color 0.15s ease, transform 0.08s ease-out;
+    transition: background-color 0.15s ease, transform 0.08s ease-out;
 }
+
+.note[data-color="yellow"]   { border-left-color: var(--swatch-yellow); }
+.note[data-color="green"]    { border-left-color: var(--swatch-green); }
+.note[data-color="blue"]     { border-left-color: var(--swatch-blue); }
+.note[data-color="purple"]   { border-left-color: var(--swatch-purple); }
+.note[data-color="pink"]     { border-left-color: var(--swatch-pink); }
+.note[data-color="gray"]     { border-left-color: var(--swatch-gray); }
+.note[data-color="charcoal"] { border-left-color: var(--swatch-charcoal); }
 
 .note:hover {
     background: var(--hover);
-    border-left-color: var(--accent);
 }
 
 /* Item 3: press feedback -- the row itself is the clickable target (opens
@@ -136,12 +161,31 @@ mark {
 }
 
 .snippet {
+    display: flex;
+    align-items: center;
+    gap: 4px;
     font-size: 13px;
     color: var(--text-secondary);
+    padding-right: 28px;
+    min-width: 0; /* let .snippet-text's ellipsis actually apply */
+}
+
+.snippet-text {
+    min-width: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    padding-right: 28px;
+}
+
+/* Item 2: rich preview glyph -- a small checklist or image icon standing in
+   for "this note has a checklist / an image", read off a cheap regex over
+   the raw markdown (see list.js getSnippetGlyph), not a render pass. Same
+   Lucide-style stroke icon language as the rest of the app. */
+.snippet-glyph {
+    flex-shrink: 0;
+    width: 13px;
+    height: 13px;
+    color: var(--text-secondary);
 }
 
 .time {
@@ -191,4 +235,131 @@ mark {
     width: 36px;
     height: 36px;
     opacity: 0.5;
+}
+
+/* Redesign Item 3: filter chips row, above the search bar. Small pill
+   toggles -- default state matches #search's own resting look (surface bg,
+   border, secondary text); active state reuses the exact --accent-soft-fill
+   + --accent-text pattern settings.css's ".shortcut-input.recording" already
+   uses for "this control is in a special active state" (see that rule) --
+   not a new visual language. */
+#filter-chips {
+    -webkit-app-region: drag;
+    padding: var(--space-2) var(--space-4) 0;
+    background: var(--bg);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1);
+}
+
+#filter-chips.hidden {
+    display: none;
+}
+
+.chip {
+    -webkit-app-region: no-drag;
+    font-size: 12px;
+    line-height: 1;
+    padding: 5px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background-color: var(--surface);
+    color: var(--text-secondary);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.08s ease-out;
+}
+
+.chip:hover {
+    background-color: var(--hover);
+}
+
+.chip.active {
+    background-color: var(--accent-soft);
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+/* Per-color chips: a small filled circle (same --swatch-* mapping as
+   .color-dot/.note[data-color]) instead of a text label -- the color IS the
+   label. Active state is an accent ring around the swatch, echoing the
+   note window's own color-picker (.color-swatch.active shows a checkmark;
+   a ring reads the same way at this much smaller size without needing to
+   render a checkmark glyph legibly at 18px). */
+.chip-color {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+}
+
+.chip-color[data-color="yellow"]   { background-color: var(--swatch-yellow); }
+.chip-color[data-color="green"]    { background-color: var(--swatch-green); }
+.chip-color[data-color="blue"]     { background-color: var(--swatch-blue); }
+.chip-color[data-color="purple"]   { background-color: var(--swatch-purple); }
+.chip-color[data-color="pink"]     { background-color: var(--swatch-pink); }
+.chip-color[data-color="gray"]     { background-color: var(--swatch-gray); }
+.chip-color[data-color="charcoal"] { background-color: var(--swatch-charcoal); }
+
+.chip-color.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+#toolbar.hidden {
+    display: none;
+}
+
+/* Recently Deleted banner -- replaces #toolbar + #filter-chips while the
+   trash view (Item 4) is active. Same #titlebar-adjacent drag-region
+   treatment as #toolbar so the window is still draggable from this strip. */
+#trash-banner {
+    -webkit-app-region: drag;
+    padding: var(--space-2) var(--space-4);
+    box-shadow: var(--shadow-separator);
+    background: var(--bg);
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+#trash-banner.hidden {
+    display: none;
+}
+
+#trash-banner small {
+    font-weight: 400;
+    color: var(--text-secondary);
+}
+
+#trash-back {
+    -webkit-app-region: no-drag;
+}
+
+/* Trash row -- same base look as .note (color stripe, hover, layout) but
+   swaps the delete button for a Restore action and shows "trashed X ago"
+   instead of the modified-time timestamp. */
+.trash-note .delete-btn {
+    opacity: 0;
+}
+
+.restore-btn {
+    position: absolute;
+    top: var(--space-3);
+    right: var(--space-3);
+    padding: 3px 10px;
+    font-size: 12px;
+    background-color: var(--accent-soft);
+    color: var(--accent);
+    border-radius: var(--radius-sm);
+}
+
+.restore-btn:hover {
+    background-color: var(--accent);
+    color: #FFFFFF;
 }
