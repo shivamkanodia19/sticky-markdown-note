@@ -131,6 +131,34 @@
     flex-shrink: 0;
 }
 
+/* Source badge (Item 9): link glyph + count on rows whose note has attached
+   browser-window sources. Same accent-soft pill language the note window's
+   own source toggle uses. flex-shrink:0 so it never squeezes; it and the
+   hover-only .delete-btn share the top-right corner, so it fades out on row
+   hover to hand that space cleanly to the trash icon. */
+.source-badge {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+    background-color: var(--accent-soft);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+    transition: opacity 0.15s ease;
+}
+
+.source-badge svg {
+    width: 11px;
+    height: 11px;
+}
+
+.note:hover .source-badge {
+    opacity: 0;
+}
+
 .color-dot[data-color="yellow"]   { background-color: var(--swatch-yellow); }
 .color-dot[data-color="green"]    { background-color: var(--swatch-green); }
 .color-dot[data-color="blue"]     { background-color: var(--swatch-blue); }

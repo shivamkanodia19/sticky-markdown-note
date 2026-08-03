@@ -807,6 +807,194 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
+  // Multi-source feature. `currentSources` mirrors the array main.js's
+  // add-note-source/remove-note-source/get-note-sources-for-window handlers
+  // already persist -- kept here so the popover's checkboxes can reflect
+  // "already attached" state without a round trip every time it opens.
+  const sourceToggleBtn = document.getElementById('source-toggle');
+  const sourcePopover = document.getElementById('source-popover');
+  const sourceWindowList = document.getElementById('source-window-list');
+  const sourceBar = document.getElementById('source-bar');
+  let currentSources = [];
+
+  // Renders the collapsible chip row under the titlebar (Item 6) and keeps
+  // the toggle button's badge/label in sync (Item 8) -- called after every
+  // load, add, and remove, always from the FULL sources array the main
+  // process just returned, never a locally-guessed delta.
+  function renderSourceBar(sources) {
+    currentSources = Array.isArray(sources) ? sources : [];
+    document.body.classList.toggle('has-sources', currentSources.length > 0);
+
+    if (sourceToggleBtn) {
+      sourceToggleBtn.classList.toggle('has-sources', currentSources.length > 0);
+      const label = currentSources.length > 0
+        ? `Sources (${currentSources.length}) -- click to manage`
+        : 'Attach a source (browser window)';
+      sourceToggleBtn.title = label;
+      sourceToggleBtn.setAttribute('aria-label', label);
+    }
+
+    if (!sourceBar) return;
+    sourceBar.innerHTML = '';
+
+    currentSources.forEach(source => {
+      const chip = document.createElement('div');
+      chip.className = 'source-chip';
+      chip.dataset.capturedAt = String(source.capturedAt);
+
+      if (source.iconDataUrl) {
+        const icon = document.createElement('img');
+        icon.className = 'source-chip-icon';
+        icon.src = source.iconDataUrl;
+        icon.alt = '';
+        chip.appendChild(icon);
+      }
+
+      const titleEl = document.createElement('span');
+      titleEl.className = 'source-chip-title';
+      titleEl.textContent = source.title;
+      titleEl.title = source.title;
+      chip.appendChild(titleEl);
+
+      const jumpBtn = document.createElement('button');
+      jumpBtn.className = 'source-chip-jump';
+      jumpBtn.title = 'Jump to source';
+      jumpBtn.setAttribute('aria-label', 'Jump to source');
+      jumpBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
+      jumpBtn.addEventListener('click', async e => {
+        e.stopPropagation();
+        await jumpToSource(source, chip, jumpBtn);
+      });
+      chip.appendChild(jumpBtn);
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'source-chip-remove';
+      removeBtn.title = 'Remove this source';
+      removeBtn.setAttribute('aria-label', 'Remove this source');
+      removeBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg>';
+      removeBtn.addEventListener('click', async e => {
+        e.stopPropagation();
+        const result = await ipcRenderer.invoke('remove-note-source', source.capturedAt);
+        if (result?.ok) renderSourceBar(result.sources);
+      });
+      chip.appendChild(removeBtn);
+
+      sourceBar.appendChild(chip);
+    });
+  }
+
+  // Jump-to-source (Item 7): re-checks real currently-open windows through
+  // the SAME main-process handler that drives the popover's own list, then
+  // asks main.js to bring the match to the foreground. The common case for
+  // anything more than a few minutes old is genuinely NOT finding a match
+  // (the browser window was closed/navigated away) -- that is not an error,
+  // it marks just this one chip stale (reduced opacity, disabled jump icon,
+  // Remove still fully works) rather than throwing or silently no-opping.
+  async function jumpToSource(source, chipEl, jumpBtn) {
+    let result;
+    try {
+      result = await ipcRenderer.invoke('focus-source-window', {
+        title: source.title,
+        ownerPath: source.ownerPath,
+      });
+    } catch (err) {
+      console.error('focus-source-window failed:', err);
+      result = { ok: false };
+    }
+
+    if (!result?.ok) {
+      chipEl.classList.add('stale');
+      chipEl.title = 'Source no longer open';
+      if (jumpBtn) {
+        jumpBtn.title = 'Source no longer open';
+        jumpBtn.setAttribute('aria-label', 'Source no longer open');
+      }
+    }
+  }
+
+  ipcRenderer.invoke('get-note-sources-for-window').then(renderSourceBar);
+
+  // Builds (or rebuilds) the popover's checkable window list from a fresh
+  // get-open-windows call every time it's opened -- open browser windows
+  // change constantly, so this is never cached across opens.
+  async function refreshSourcePopoverList() {
+    if (!sourceWindowList) return;
+    sourceWindowList.innerHTML = '<div class="source-empty-state">Loading open browser windows...</div>';
+
+    let windows = [];
+    try {
+      windows = await ipcRenderer.invoke('get-open-windows');
+    } catch (err) {
+      console.error('get-open-windows failed:', err);
+    }
+
+    sourceWindowList.innerHTML = '';
+
+    if (!windows || windows.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'source-empty-state';
+      empty.textContent = 'No open browser windows found.';
+      sourceWindowList.appendChild(empty);
+      return;
+    }
+
+    windows.forEach(w => {
+      const isChecked = currentSources.some(s => s.ownerPath === w.ownerPath && s.title === w.title);
+
+      const row = document.createElement('label');
+      row.className = 'source-row';
+
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = isChecked;
+      row.appendChild(cb);
+
+      if (w.iconDataUrl) {
+        const icon = document.createElement('img');
+        icon.className = 'source-row-icon';
+        icon.src = w.iconDataUrl;
+        icon.alt = '';
+        row.appendChild(icon);
+      }
+
+      const titleEl = document.createElement('span');
+      titleEl.className = 'source-row-title';
+      titleEl.textContent = w.title;
+      titleEl.title = w.title;
+      row.appendChild(titleEl);
+
+      cb.addEventListener('change', async () => {
+        if (cb.checked) {
+          const result = await ipcRenderer.invoke('add-note-source', {
+            title: w.title,
+            ownerName: w.ownerName,
+            ownerPath: w.ownerPath,
+          });
+          if (result?.ok) {
+            renderSourceBar(result.sources);
+          } else {
+            cb.checked = false;
+          }
+        } else {
+          const existing = currentSources.find(s => s.ownerPath === w.ownerPath && s.title === w.title);
+          if (existing) {
+            const result = await ipcRenderer.invoke('remove-note-source', existing.capturedAt);
+            if (result?.ok) renderSourceBar(result.sources);
+          }
+        }
+      });
+
+      sourceWindowList.appendChild(row);
+    });
+  }
+
+  sourceToggleBtn?.addEventListener('click', async e => {
+    e.stopPropagation();
+    const wasHidden = sourcePopover?.classList.contains('hidden');
+    sourcePopover?.classList.toggle('hidden');
+    if (wasHidden) await refreshSourcePopoverList();
+  });
+
   // "..." menu: Copy Note + Duplicate + Export as PDF.
   const moreMenuBtn = document.getElementById('more-menu-btn');
   const moreMenu = document.getElementById('more-menu');
@@ -853,10 +1041,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Closes any open popover/dropdown on an outside click -- both the color
-  // popover and the "..." menu share this one listener.
+  // Closes any open popover/dropdown on an outside click -- the color
+  // popover, the source popover, and the "..." menu all share this one
+  // listener.
   document.addEventListener('click', () => {
     colorPopover?.classList.add('hidden');
+    sourcePopover?.classList.add('hidden');
     moreMenu?.classList.add('hidden');
   });
 

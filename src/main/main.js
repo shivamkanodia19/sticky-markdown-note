@@ -12,6 +12,16 @@ const { dialog, nativeTheme } = require('electron');
 const NOTE_COLORS = ['yellow', 'green', 'blue', 'purple', 'pink', 'gray', 'charcoal'];
 const DEFAULT_NOTE_COLOR = 'yellow';
 
+// Multi-source feature: a note "source" conceptually means "a webpage", not
+// "any open window" -- get-windows' openWindows() returns every top-level OS
+// window (VS Code, File Explorer, this app's own windows, etc.), so this
+// allowlist narrows candidates down to recognized browsers only. Deliberately
+// window-level, not tab-level: there is no way to see individual tabs without
+// a separate browser-extension project, which is explicitly out of scope --
+// the UI says this plainly (see note.js's source popover help text) rather
+// than imply more than it delivers.
+const BROWSER_EXECUTABLES = ['chrome.exe', 'msedge.exe', 'firefox.exe', 'brave.exe', 'opera.exe', 'vivaldi.exe'];
+
 app.setAppUserModelId('com.hsmin.stickymarkdownnote');
 
 // Single-instance lock. Windows launches every "open" (desktop icon,
@@ -187,6 +197,12 @@ function writeSessionNow() {
 
 let Store; // Declare Store as a variable globally
 let store; // Declare store instance globally
+
+// get-windows (ESM-only, same interop problem electron-store already solved
+// above) -- assigned inside app.on('ready', ...) below, before any window is
+// created, so every IPC handler that reads this closure variable is
+// registered before a renderer can possibly race it.
+let openWindows;
 
 let mainWindow;
 let settingsWindow; // Add this line to declare settingsWindow globally
@@ -529,6 +545,47 @@ function saveDestinationState(notePath, destKey, value) {
   const destinations = { ...(existing.destinations || {}), [destKey]: value };
   data[fullPath] = { ...existing, destinations };
   writeStateFileAtomic(data);
+}
+
+// Per-note "sources" (multi-source feature): a note can be tagged with one
+// or more currently-open BROWSER windows as its source. No window handle/HWND
+// is stored -- those aren't stable across restarts -- only the title/owner
+// identity plus when it was attached (capturedAt), which also doubles as the
+// per-source removal key. Same readStateFile/writeStateFileAtomic
+// merge-not-overwrite pattern as saveWindowState/saveDestinationState above;
+// both return the FULL resulting sources array so the renderer can re-render
+// its chip row/checkbox state directly off the response, no extra round trip.
+function addNoteSourceState(notePath, source) {
+  const fullPath = path.resolve(notePath);
+  const data = readStateFile();
+  const existing = data[fullPath] || {};
+  const sources = Array.isArray(existing.sources) ? [...existing.sources] : [];
+
+  const isDuplicate = sources.some(
+    s => s.ownerPath === source.ownerPath && s.title === source.title
+  );
+  if (!isDuplicate) {
+    sources.push({
+      title: source.title,
+      ownerName: source.ownerName || '',
+      ownerPath: source.ownerPath,
+      capturedAt: Date.now(),
+    });
+    data[fullPath] = { ...existing, sources };
+    writeStateFileAtomic(data);
+  }
+  return sources;
+}
+
+function removeNoteSourceState(notePath, capturedAt) {
+  const fullPath = path.resolve(notePath);
+  const data = readStateFile();
+  const existing = data[fullPath] || {};
+  const sources = (Array.isArray(existing.sources) ? existing.sources : [])
+    .filter(s => s.capturedAt !== capturedAt);
+  data[fullPath] = { ...existing, sources };
+  writeStateFileAtomic(data);
+  return sources;
 }
 
 function cleanStartup() {
@@ -957,9 +1014,227 @@ ipcMain.handle('get-note-meta', () => {
       color: NOTE_COLORS.includes(entry.color) ? entry.color : DEFAULT_NOTE_COLOR,
       pinned: entry.pinned !== undefined ? !!entry.pinned : true,
       chatgpt: !!(entry.destinations && entry.destinations.chatgpt),
+      // Item 9: source badge/count on each list row. Only the COUNT crosses
+      // to the list window (not the full source objects) -- the badge just
+      // needs "how many", so this stays the single bulk read the list render
+      // already makes rather than adding a second get-note-sources call.
+      sources: Array.isArray(entry.sources) ? entry.sources.length : 0,
     };
   }
   return meta;
+});
+
+// ===== Multi-source feature =====
+//
+// "Source" candidates are currently-open BROWSER windows (window-level, not
+// tab-level -- see BROWSER_EXECUTABLES's comment above). Own-app windows are
+// excluded by comparing owner.path against process.execPath, same identity
+// check used to recognize "is this a Sticky Markdown Note window" without
+// needing a separate allowlist for it.
+function isOwnAppWindow(ownerPath) {
+  if (!ownerPath) return false;
+  try {
+    return path.resolve(ownerPath) === path.resolve(process.execPath);
+  } catch {
+    return false;
+  }
+}
+
+function isRecognizedBrowser(owner) {
+  const base = owner?.path ? path.basename(owner.path).toLowerCase() : '';
+  if (BROWSER_EXECUTABLES.includes(base)) return true;
+  // Fallback for the rare case a window's path can't be resolved but its
+  // process display name still identifies a known browser.
+  const name = (owner?.name || '').toLowerCase();
+  return ['chrome', 'edge', 'firefox', 'brave', 'opera', 'vivaldi'].some(n => name.includes(n));
+}
+
+async function listRecognizedBrowserWindows() {
+  if (!openWindows) return [];
+  let windows;
+  try {
+    windows = await openWindows();
+  } catch (e) {
+    console.error('get-windows openWindows() failed:', e);
+    return [];
+  }
+  return windows.filter(
+    w => w.title && !isOwnAppWindow(w.owner?.path) && isRecognizedBrowser(w.owner)
+  );
+}
+
+// app.getFileIcon results are cached per exe path (in-memory, cleared on
+// restart) -- multiple open windows from the same browser, and repeated
+// popover opens, would otherwise re-fetch the identical icon over and over.
+const fileIconCache = new Map();
+async function getFileIconDataUrl(ownerPath) {
+  if (!ownerPath) return null;
+  if (fileIconCache.has(ownerPath)) return fileIconCache.get(ownerPath);
+  try {
+    const icon = await app.getFileIcon(ownerPath, { size: 'small' });
+    const dataUrl = icon.toDataURL();
+    fileIconCache.set(ownerPath, dataUrl);
+    return dataUrl;
+  } catch (e) {
+    console.error('app.getFileIcon failed for', ownerPath, e);
+    return null;
+  }
+}
+
+// Window enumeration for the note window's source popover (Item 2/5). Only
+// ever returns recognized browsers, per the "a source means a webpage, not
+// any window" reasoning above.
+ipcMain.handle('get-open-windows', async () => {
+  const windows = await listRecognizedBrowserWindows();
+  const results = [];
+  for (const w of windows) {
+    results.push({
+      title: w.title,
+      ownerName: w.owner?.name || '',
+      ownerPath: w.owner?.path || '',
+      iconDataUrl: await getFileIconDataUrl(w.owner?.path),
+    });
+  }
+  return results;
+});
+
+// The on-disk shape (addNoteSourceState/removeNoteSourceState) intentionally
+// stores only { title, ownerName, ownerPath, capturedAt } per source -- no
+// icon, per the design brief's exact field list. Icons are re-derived here,
+// on the way OUT to a note window's own chip row/popover, from the same
+// cached app.getFileIcon lookup 'get-open-windows' already uses, rather than
+// bloating the state file with base64 icon data that could also go stale if
+// a browser's own icon ever changes.
+async function enrichSourcesWithIcons(sources) {
+  return Promise.all(sources.map(async s => ({
+    ...s,
+    iconDataUrl: await getFileIconDataUrl(s.ownerPath),
+  })));
+}
+
+ipcMain.handle('add-note-source', async (event, source) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed() || !win.notePath) return { ok: false };
+  if (!source || typeof source.title !== 'string' || typeof source.ownerPath !== 'string') {
+    return { ok: false };
+  }
+
+  const sources = addNoteSourceState(win.notePath, {
+    title: source.title,
+    ownerName: typeof source.ownerName === 'string' ? source.ownerName : '',
+    ownerPath: source.ownerPath,
+  });
+
+  // The list window shows a source badge + count per note (read from disk,
+  // not from any window's in-memory state), same refresh-list nudge
+  // set-note-color already sends for the same reason.
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+    mainWindow.webContents.send('refresh-list');
+  }
+
+  return { ok: true, sources: await enrichSourcesWithIcons(sources) };
+});
+
+ipcMain.handle('remove-note-source', async (event, capturedAt) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed() || !win.notePath) return { ok: false };
+
+  const sources = removeNoteSourceState(win.notePath, capturedAt);
+
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+    mainWindow.webContents.send('refresh-list');
+  }
+
+  return { ok: true, sources: await enrichSourcesWithIcons(sources) };
+});
+
+// Per-window read (Item 5's note-open state and the popover's checkbox
+// state) -- same BrowserWindow.fromWebContents + direct-state-file-read
+// pattern as get-note-color/get-destinations, rather than trusting a path
+// argument from the renderer.
+ipcMain.handle('get-note-sources-for-window', async event => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed() || !win.notePath) return [];
+  const data = readStateFile();
+  const entry = data[path.resolve(win.notePath)];
+  const sources = Array.isArray(entry?.sources) ? entry.sources : [];
+  return enrichSourcesWithIcons(sources);
+});
+
+// Bulk source lookup for the list window (Item 9) -- same shape/reasoning as
+// get-note-colors immediately above: reads the state file directly since
+// most listed notes have no open window at all.
+ipcMain.handle('get-note-sources', () => {
+  const data = readStateFile();
+  const sourcesByPath = {};
+  for (const [fullPath, entry] of Object.entries(data)) {
+    if (entry && Array.isArray(entry.sources) && entry.sources.length > 0) {
+      sourcesByPath[fullPath] = entry.sources;
+    }
+  }
+  return sourcesByPath;
+});
+
+// Jump-to-source (Item 7). There is no Electron API to bring an arbitrary
+// FOREIGN window to the foreground -- BrowserWindow.focus() only works on
+// this app's own windows. Researched the current best approach for this on
+// Windows: a raw user32.dll SetForegroundWindow P/Invoke is the "obvious"
+// answer, but Windows' focus-stealing-prevention heuristic frequently just
+// silently ignores that call for a background process with no recent input.
+// WScript.Shell's AppActivate (invoked here via a one-off PowerShell call,
+// no native module/node-gyp build needed) is what real-world Windows tools
+// actually rely on for this instead: it's treated like a user-driven Alt+Tab
+// by the shell, not a raw window-message call, so it reliably brings the
+// target window forward where SetForegroundWindow often doesn't. Matched by
+// process id (not HWND, which isn't stable/storable across restarts anyway,
+// and not window title text, which AppActivate treats as a substring match
+// against EVERY top-level window and can pick the wrong one) -- bringing
+// forward "the browser process's window" is exactly the window-level (not
+// tab-level) granularity this whole feature already promises.
+function focusWindowByProcessId(pid) {
+  return new Promise(resolve => {
+    let settled = false;
+    let child;
+    try {
+      child = spawn('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `$ws = New-Object -ComObject WScript.Shell; Write-Output $ws.AppActivate(${Number(pid)})`,
+      ], { stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch (err) {
+      console.error('focusWindowByProcessId spawn failed:', err);
+      resolve(false);
+      return;
+    }
+
+    let out = '';
+    child.stdout.on('data', d => { out += d.toString(); });
+    child.once('error', err => {
+      if (settled) return;
+      settled = true;
+      console.error('focusWindowByProcessId powershell error:', err);
+      resolve(false);
+    });
+    child.once('close', () => {
+      if (settled) return;
+      settled = true;
+      resolve(out.trim().toLowerCase() === 'true');
+    });
+  });
+}
+
+ipcMain.handle('focus-source-window', async (event, source) => {
+  if (!source || typeof source.title !== 'string' || typeof source.ownerPath !== 'string') {
+    return { ok: false };
+  }
+
+  const windows = await listRecognizedBrowserWindows();
+  const match = windows.find(w => w.owner?.path === source.ownerPath && w.title === source.title);
+  if (!match) return { ok: false, stale: true };
+
+  const focused = await focusWindowByProcessId(match.owner.processId);
+  return { ok: focused, stale: false };
 });
 
 // Screenshot capture (v2 rework): launches Windows' own native region-select
@@ -1136,6 +1411,14 @@ app.on('ready', async () => {
   // theme flash). Registering handlers first removes the race entirely.
   Store = (await import('electron-store')).default;
   store = new Store();
+
+  // get-windows is ESM-only, identical interop problem/fix as electron-store
+  // directly above -- deferred here so 'get-open-windows'/'focus-source-
+  // window' (registered at module scope, further down this file) are already
+  // registered before any window exists to race them; openWindows is simply
+  // unset until this line runs, which always completes before a renderer is
+  // alive to invoke either handler.
+  ({ openWindows } = await import('get-windows'));
 
   // Initial theme setting (system theme or stored setting)
   if (store.get('theme') === undefined) {

@@ -183,6 +183,19 @@ body {
   color: #FFFFFF !important;
 }
 
+/* Source toggle button: same dimmed/highlighted on-off language as
+   pin-toggle/chatgpt-toggle above -- solid accent fill once >=1 source is
+   attached, dim otherwise. */
+#titlebar .title-btn#source-toggle {
+  opacity: 0.45 !important;
+}
+
+#titlebar .title-btn#source-toggle.has-sources {
+  opacity: 1 !important;
+  background-color: var(--accent) !important;
+  color: #FFFFFF !important;
+}
+
 /* Screenshot button "pending" state: shown while polling the clipboard for
    a native snip result (see note.js's captureScreenshot/stopSnipPolling).
    Same accent-highlight language as the pin/ChatGPT toggles above (solid
@@ -347,12 +360,199 @@ body {
   color: var(--text-primary);
 }
 
+/* Source popover (multi-source feature): reuses the exact .popover/
+   .popover-anchor shell (position/shadow/radius/open-close transition) the
+   color picker above already established -- this only adapts the INTERNAL
+   layout from a row of circular swatches to a scrollable column of checkable
+   window rows, the same way .dropdown-menu already differs internally from
+   .popover while sharing the same floating-chrome shadow/radius system. */
+#source-popover {
+  flex-direction: column;
+  align-items: stretch;
+  width: 280px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.source-popover-help {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  padding: var(--space-1) var(--space-2) var(--space-2);
+}
+
+.source-window-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* A <label>, not a <button> -- sidesteps the "#titlebar button" specificity
+   fight .color-swatch/.dropdown-item above need !important-free workarounds
+   for, since #titlebar's own `button` selector never matches a label. */
+.source-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-primary);
+}
+
+.source-row:hover {
+  background-color: var(--hover);
+}
+
+.source-row input[type="checkbox"] {
+  flex-shrink: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.source-row-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 2px;
+}
+
+.source-row-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.source-empty-state {
+  padding: var(--space-3) var(--space-2);
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+/* Source chips row (Item 6): collapsible strip directly under the titlebar.
+   Same absolute-overlay convention #titlebar/#bottom-toolbar/
+   #loading-indicator already use (position:absolute rather than static
+   flow) -- #preview's own padding-top already reserves space for the
+   titlebar the same way; note.js toggles body.has-sources so #preview
+   reserves the EXTRA height only while this bar actually has content.
+   display:none by default -> zero layout cost for the common untagged case. */
+:root {
+  --source-bar-height: 34px;
+}
+
+#source-bar {
+  display: none;
+  position: absolute;
+  top: var(--titlebar-height);
+  left: 0;
+  right: 0;
+  height: var(--source-bar-height);
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  overflow-x: auto;
+  overflow-y: hidden;
+  background-color: var(--titlebar-bg);
+  box-shadow: var(--shadow-separator);
+  z-index: 98;
+  -webkit-app-region: no-drag;
+}
+
+body.has-sources #source-bar {
+  display: flex;
+}
+
+body.has-sources #preview {
+  padding-top: calc(var(--titlebar-height) + var(--source-bar-height));
+}
+
+.source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  max-width: 170px;
+  padding: 3px 4px 3px 6px;
+  border-radius: var(--radius-sm);
+  background-color: var(--hover);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: opacity 0.15s ease;
+}
+
+.source-chip.stale {
+  opacity: 0.55;
+}
+
+.source-chip-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 2px;
+}
+
+.source-chip-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.source-chip-jump,
+.source-chip-remove {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.source-chip-jump svg,
+.source-chip-remove svg {
+  width: 12px;
+  height: 12px;
+}
+
+.source-chip-jump:hover {
+  background-color: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Stale sources (Item 7): the source is no longer found among real open
+   windows, so jumping to it is disabled outright -- pointer-events:none
+   rather than just a visual dim, per spec -- while Remove (the X) stays
+   fully functional either way, on every chip. */
+.source-chip.stale .source-chip-jump {
+  pointer-events: none;
+  opacity: 0.4;
+}
+
+.source-chip-remove:hover {
+  background-color: var(--danger-soft);
+  color: var(--danger);
+}
+
 /* Export as PDF (Item 7): printToPDF renders the page as-if-printed, so
    these rules hide every bit of app chrome and show only the rendered
    Markdown -- otherwise the PDF would contain the titlebar, the raw
    textarea, and the bottom toolbar instead of a clean document. */
 @media print {
   #titlebar,
+  #source-bar,
   #bottom-toolbar,
   #loading-indicator,
   .popover,

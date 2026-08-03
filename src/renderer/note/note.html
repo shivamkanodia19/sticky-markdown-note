@@ -54,6 +54,25 @@
             <button class="color-swatch" data-color="charcoal" title="Charcoal" aria-label="Charcoal"><svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
           </div>
         </div>
+        <div class="popover-anchor">
+          <!-- Multi-source feature: attach one or more currently-open BROWSER
+               windows to this note as its "source". Window-level only -- see
+               the help text inside #source-popover below for why, spelled out
+               plainly rather than implying tab-level detection this app can't
+               actually do. -->
+          <button id="source-toggle" class="title-btn" title="Attach a source (browser window)" aria-label="Attach a source (browser window)" aria-haspopup="true">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+            </svg>
+          </button>
+          <div id="source-popover" class="popover hidden">
+            <div class="source-popover-help">
+              Shows one window per open browser (whichever tab is active) -- not individual tabs. Seeing specific tabs would need a separate browser extension.
+            </div>
+            <div id="source-window-list" class="source-window-list"></div>
+          </div>
+        </div>
         <button id="screenshot-btn" class="title-btn" title="Screenshot" aria-label="Screenshot">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>
@@ -84,6 +103,12 @@
         </button>
       </div>
     </div>
+
+    <!-- Source chips row: collapsible (see note.css's body.has-sources rules
+         and note.js's renderSourceBar) -- zero height/display:none when this
+         note has no attached sources, so the common untagged case pays no
+         layout cost at all. -->
+    <div id="source-bar"></div>
 
     <div id="loading-indicator" style="display: none;">
       <div class="loading-spinner"></div>

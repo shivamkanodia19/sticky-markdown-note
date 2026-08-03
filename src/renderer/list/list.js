@@ -274,7 +274,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         score = titleMatch ? 2 : 1;
       }
 
-      visibleNotes.push({ note, content, score, color: noteMeta.color });
+      visibleNotes.push({ note, content, score, color: noteMeta.color, sourceCount: noteMeta.sources || 0 });
     });
 
     if (currentSearch) {
@@ -312,13 +312,22 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
-    visibleNotes.forEach(({ note, content, color }) => {
+    visibleNotes.forEach(({ note, content, color, sourceCount }) => {
       const titleHtml = currentSearch
         ? highlightMatch(getNoteTitle(content), currentSearch)
         : escapeHtml(getNoteTitle(content));
       const snippetHtml = getSearchSnippet(content, currentSearch);
       const glyph = getSnippetGlyph(content);
       const glyphHtml = glyph ? GLYPH_SVG[glyph] : '';
+
+      // Source badge (Item 9): link glyph + count when a note has one or more
+      // attached browser-window sources (count comes from get-note-meta, same
+      // single bulk read as color/pinned/chatgpt). Fades on row hover so the
+      // delete icon that shares the top-right corner has clean space.
+      const sourceLabel = `${sourceCount} source${sourceCount === 1 ? '' : 's'} attached`;
+      const sourceBadgeHtml = sourceCount > 0
+        ? `<span class="source-badge" title="${sourceLabel}" aria-label="${sourceLabel}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>${sourceCount}</span>`
+        : '';
 
       const div = document.createElement('div');
       div.className = 'note';
@@ -327,6 +336,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 <div class="row-top">
                   <span class="color-dot" data-color="${color}" title="${color}"></span>
                   <div class="title">${titleHtml}</div>
+                  ${sourceBadgeHtml}
                 </div>
                 <div class="snippet">${glyphHtml}<span class="snippet-text">${snippetHtml}</span></div>
                 <div class="time">${new Date(note.mtime).toLocaleString()}</div>
