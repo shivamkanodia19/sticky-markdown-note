@@ -56,6 +56,25 @@ const stateFilePath = path.join(app.getPath('userData'), 'note-window-state.json
 const notesDir = process.env.STICKY_NOTES_DIR || 'C:\\Users\\shiva\\Sticky Notes';
 if (!fs.existsSync(notesDir)) fs.mkdirSync(notesDir, { recursive: true });
 
+// Recently Deleted / trash: a subfolder of notesDir, not userData -- trashed
+// notes are still real .md files, just moved out of the "visible" folder, so
+// they stay alongside the notes they came from (same drive/volume, which
+// also keeps the delete-time rename atomic -- see delete-note below) and are
+// still directly readable by an agent/human poking at the filesystem.
+const trashDir = path.join(notesDir, '.trash');
+if (!fs.existsSync(trashDir)) fs.mkdirSync(trashDir, { recursive: true });
+
+// Retention window for the trash: 48 hours. Picked over a shorter window
+// (e.g. 24h) so a note deleted Friday evening is still recoverable Monday
+// morning -- the whole point of a "Recently Deleted" view over the old
+// 6-second in-memory cache is surviving exactly that kind of gap. Picked
+// over a much longer window (e.g. 7-30 days) because this is a single-user
+// sticky-notes app with no manual "empty trash" UI -- an unbounded or
+// long-lived trash would just quietly accumulate every deleted note's file
+// forever. 48h is long enough to catch "oh wait, I needed that" the next
+// time the app is used, without becoming a second permanent notes folder.
+const TRASH_RETENTION_MS = 48 * 60 * 60 * 1000;
+
 // "Send to ChatGPT" destination: mirrors a tagged note's content into the
 // Google Drive desktop-sync folder, which Shivam has connected to ChatGPT as
 // a native Drive connector. This is a *mirror*, never the source of truth --
@@ -605,31 +624,28 @@ ipcMain.on('create-new-note-nearby', event => {
   createNewNote(newPos);
 });
 
-// Delete + Undo (safety fix). An empty note (confirmed by reading the
-// actual file content -- trimmed, not a UI flag) deletes with zero
-// friction, exactly like before. A note with real content is ALSO deleted
-// immediately -- the action should feel instant, matching Gmail/Superhuman-
-// style undo patterns, not a blocking confirmation dialog -- but its
-// content, its full state-file entry (pin/color/chatgpt destination), and
-// whether it had a ChatGPT mirror are cached in memory for UNDO_WINDOW_MS so
-// the renderer's toast can offer a genuine, working Undo.
+// Delete + Undo + Recently Deleted (real soft-delete). An empty note
+// (confirmed by reading the actual file content -- trimmed, not a UI flag)
+// still deletes for real, with zero friction, exactly like before: nothing
+// worth restoring, so no trash entry, no toast.
 //
-// This is the "delete-and-cache-for-restore" approach, not a soft-delete-
-// with-delay: the file is really gone from disk the instant this handler
-// returns. Chosen over delaying the real unlink because deleteChatgptMirror
-// below is already unconditional and immediate -- keeping the mirror's
-// deletion in lockstep with the primary file's (both gone together, both
-// restorable together) is simpler and less error-prone than adding a second,
-// slower-to-unwind delayed-delete path for only one of the two files.
+// A note with real content is soft-deleted instead: the file is MOVED (a
+// real fs.rename, not copy-then-unlink) from notesDir into notesDir/.trash,
+// and its state-file entry (pin/color/chatgpt destination) moves out of the
+// top-level per-path map into a `_trash` bucket, keyed by basename, tagged
+// with a `trashedAt` timestamp. This replaces the old approach (delete the
+// real file immediately, keep its content in an in-memory Map for ~6s so
+// the toast's Undo had something to restore from) -- that cache was lost on
+// an app restart and expired for good after 6 seconds, so a note was only
+// ever a few seconds and one crash away from being gone forever. Moving the
+// file into an on-disk trash folder instead means restoring it later is just
+// moving it back, and it survives a restart -- see purgeOldTrash below for
+// the 48h retention window that eventually cleans it up for real.
 //
-// Not persisted to disk anywhere -- an app restart during the few-second
-// undo window loses the undo option, which matches "the file is genuinely,
-// immediately gone" semantics: there's no on-disk trace of a pending undo
-// to restart from, same as any other in-memory-only runtime state in main.js
-// (openNoteWindows, lastMirroredContent, driveMountCache).
-const UNDO_WINDOW_MS = 6000; // renderer's toast shows Undo for 5s; outlives it by a 1s margin
-const pendingDeletes = new Map(); // fullPath -> { content, stateEntry, hadMirror, timer }
-
+// The note's ChatGPT mirror is deleted immediately either way, unconditional
+// on hadMirror (deleteChatgptMirror already no-ops silently on ENOENT) --
+// a trashed note has no reason to stay visible to ChatGPT. Whether it HAD a
+// mirror is recorded in the trash entry so restoreFromTrash can re-create it.
 ipcMain.handle('delete-note', async (event, noteFile) => {
   const fullPath = path.resolve(path.join(notesDir, noteFile));
 
@@ -665,84 +681,87 @@ ipcMain.handle('delete-note', async (event, noteFile) => {
   } catch {
     hadMirror = false;
   }
-
-  // Deleting a note that's mirrored shouldn't leave an orphaned copy behind
-  // in Drive. Called unconditionally rather than gated on hadMirror:
-  // deleteChatgptMirror already no-ops silently (ENOENT) when there's
-  // nothing to remove, so this is safe for untagged notes too.
   await deleteChatgptMirror(fullPath);
 
-  let stateEntry = null;
-  if (fs.existsSync(stateFilePath)) {
-    try {
-      const stateData = readStateFile();
-      stateEntry = stateData[fullPath] || null;
-      delete stateData[fullPath];
-      writeStateFileAtomic(stateData);
-    } catch (err) {
-      console.error('Failed to clean up window state:', err);
+  const stateData = readStateFile();
+  const stateEntry = stateData[fullPath] || null;
+  delete stateData[fullPath];
+
+  if (isEmpty) {
+    // Nothing worth restoring -- real, permanent delete, no trash entry, no
+    // toast, matches the "empty notes deletion should be automatic" behavior
+    // exactly as before.
+    writeStateFileAtomic(stateData);
+    if (fs.existsSync(fullPath)) {
+      fs.unlinkSync(fullPath);
     }
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+      mainWindow.webContents.send('refresh-list');
+    }
+    return { ok: true, isEmpty: true };
   }
 
-  // Delete file
-  if (fs.existsSync(fullPath)) {
-    fs.unlinkSync(fullPath);
+  const basename = path.basename(fullPath);
+  const trashPath = path.join(trashDir, basename);
+  try {
+    await fs.promises.rename(fullPath, trashPath);
+  } catch (e) {
+    console.error('Failed to move note to trash:', e);
+    return { ok: false, error: String(e) };
   }
 
-  // Refresh list
+  stateData._trash = stateData._trash || {};
+  stateData._trash[basename] = {
+    originalPath: fullPath,
+    trashedAt: Date.now(),
+    stateEntry,
+    hadMirror,
+  };
+  writeStateFileAtomic(stateData);
+
   if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
     mainWindow.webContents.send('refresh-list');
   }
 
-  if (isEmpty) {
-    // Nothing worth restoring -- no cache entry, no undo, matches the "empty
-    // notes deletion should be automatic" requirement exactly.
-    return { ok: true, isEmpty: true };
-  }
-
-  // Cache for Undo. Keyed by fullPath -- generateNewNoteFilePath's
-  // ISO-timestamp naming means a brand-new note can never collide with a
-  // still-pending delete's key while its undo window is open.
-  if (pendingDeletes.has(fullPath)) {
-    clearTimeout(pendingDeletes.get(fullPath).timer);
-  }
-  const timer = setTimeout(() => {
-    pendingDeletes.delete(fullPath);
-  }, UNDO_WINDOW_MS);
-  pendingDeletes.set(fullPath, { content, stateEntry, hadMirror, timer });
-
   return { ok: true, isEmpty: false };
 });
 
-// Undo for the delete-and-cache-for-restore flow above. Recreates the exact
-// file content and restores the exact state-file entry (pin/color/chatgpt
-// destination) that existed right before deletion -- not a fresh empty note
-// with the same name -- and re-writes the ChatGPT mirror too, if the
-// deleted note had one, keeping the mirror's lifecycle in sync with the
-// primary file's on the way back as well as on the way out.
-ipcMain.handle('undo-delete-note', async (event, noteFile) => {
-  const fullPath = path.resolve(path.join(notesDir, noteFile));
-  const pending = pendingDeletes.get(fullPath);
-  if (!pending) return { ok: false, error: 'expired' };
+// Shared by BOTH the fast 5-second toast Undo AND the Recently Deleted
+// view's per-item Restore button -- from the trash's point of view they're
+// the same operation (move a note back out of .trash, restore its state,
+// recreate its mirror if it had one), just triggered from two different UI
+// entry points. `noteFile` is the trashed file's basename: exactly the same
+// string delete-note above received and used as the `_trash` bucket's key.
+async function restoreFromTrash(noteFile) {
+  const basename = path.basename(noteFile);
+  const data = readStateFile();
+  const trashEntry = data._trash && data._trash[basename];
+  if (!trashEntry) {
+    // Expired past the retention window and already purged, already
+    // restored once, or never existed -- either way, nothing to undo.
+    return { ok: false, error: 'not in trash' };
+  }
 
-  clearTimeout(pending.timer);
-  pendingDeletes.delete(fullPath);
+  const trashPath = path.join(trashDir, basename);
+  const destPath = trashEntry.originalPath || path.join(notesDir, basename);
 
+  let content;
   try {
-    await fs.promises.writeFile(fullPath, pending.content, 'utf-8');
+    await fs.promises.rename(trashPath, destPath);
+    content = await fs.promises.readFile(destPath, 'utf-8');
   } catch (e) {
-    console.error('Undo delete failed (file restore):', e);
+    console.error('Restore from trash failed:', e);
     return { ok: false, error: String(e) };
   }
 
-  if (pending.stateEntry) {
-    const data = readStateFile();
-    data[fullPath] = pending.stateEntry;
-    writeStateFileAtomic(data);
+  if (trashEntry.stateEntry) {
+    data[destPath] = trashEntry.stateEntry;
   }
+  delete data._trash[basename];
+  writeStateFileAtomic(data);
 
-  if (pending.hadMirror) {
-    await writeChatgptMirror(fullPath, pending.content);
+  if (trashEntry.hadMirror) {
+    await writeChatgptMirror(destPath, content);
   }
 
   if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
@@ -750,7 +769,60 @@ ipcMain.handle('undo-delete-note', async (event, noteFile) => {
   }
 
   return { ok: true };
+}
+
+ipcMain.handle('undo-delete-note', (event, noteFile) => restoreFromTrash(noteFile));
+
+// Bulk read for the Recently Deleted view -- same readStateFile source of
+// truth as get-note-meta/get-note-colors below, just reading the `_trash`
+// bucket instead of the top-level per-path entries.
+ipcMain.handle('get-trash-notes', () => {
+  const data = readStateFile();
+  const trash = data._trash || {};
+  return Object.entries(trash).map(([basename, entry]) => {
+    const se = entry.stateEntry || {};
+    return {
+      file: basename,
+      fullPath: path.join(trashDir, basename),
+      trashedAt: entry.trashedAt,
+      color: NOTE_COLORS.includes(se.color) ? se.color : DEFAULT_NOTE_COLOR,
+      pinned: se.pinned !== undefined ? !!se.pinned : true,
+      chatgpt: !!(se.destinations && se.destinations.chatgpt),
+    };
+  });
 });
+
+// Permanently purges any trash entry older than TRASH_RETENTION_MS -- run
+// once at startup (app.on('ready') below) and on a periodic interval while
+// the app stays running, so "empty the trash" is never a manual chore. Not
+// gated on the Memo List or Recently Deleted view being open.
+async function purgeOldTrash() {
+  const data = readStateFile();
+  const trash = data._trash || {};
+  const now = Date.now();
+  let changed = false;
+
+  for (const [basename, entry] of Object.entries(trash)) {
+    if (!entry || typeof entry.trashedAt !== 'number') continue;
+    if (now - entry.trashedAt <= TRASH_RETENTION_MS) continue;
+
+    try {
+      await fs.promises.unlink(path.join(trashDir, basename));
+    } catch (e) {
+      if (e.code !== 'ENOENT') console.error('Trash purge failed to delete file:', e);
+    }
+    delete trash[basename];
+    changed = true;
+  }
+
+  if (changed) {
+    data._trash = trash;
+    writeStateFileAtomic(data);
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+      mainWindow.webContents.send('refresh-list');
+    }
+  }
+}
 
 ipcMain.on('open-main-window', () => {
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -858,11 +930,36 @@ ipcMain.handle('get-note-colors', () => {
   const data = readStateFile();
   const colors = {};
   for (const [fullPath, entry] of Object.entries(data)) {
+    if (fullPath === '_trash') continue; // reserved bucket, not a note entry
     if (entry && NOTE_COLORS.includes(entry.color)) {
       colors[fullPath] = entry.color;
     }
   }
   return colors;
+});
+
+// Bulk metadata lookup for the Memo List's filter chips (Pinned / Sent to
+// ChatGPT / per-color) -- same readStateFile source of truth as
+// get-note-colors above (deliberately not a second read path: the list
+// window calls this ONCE per render instead of get-note-colors, getting
+// color plus pinned/chatgpt in the same pass). Defaults mirror the ones
+// createNoteWindow itself applies when a note has no state entry yet: color
+// defaults to yellow, pinned defaults to true (this app's pin-by-default
+// behavior), chatgpt defaults to false (opt-out default only applies to
+// brand-new notes at creation time, which isn't knowable from here).
+ipcMain.handle('get-note-meta', () => {
+  const data = readStateFile();
+  const meta = {};
+  for (const [fullPath, entry] of Object.entries(data)) {
+    if (fullPath === '_trash') continue; // reserved bucket, not a note entry
+    if (!entry || typeof entry !== 'object') continue;
+    meta[fullPath] = {
+      color: NOTE_COLORS.includes(entry.color) ? entry.color : DEFAULT_NOTE_COLOR,
+      pinned: entry.pinned !== undefined ? !!entry.pinned : true,
+      chatgpt: !!(entry.destinations && entry.destinations.chatgpt),
+    };
+  }
+  return meta;
 });
 
 // Screenshot capture (v2 rework): launches Windows' own native region-select
@@ -1128,6 +1225,15 @@ app.on('ready', async () => {
 
   createMainWindow();
   createTray();
+
+  // Recently Deleted retention enforcement: once now at startup (catches
+  // whatever aged past 48h while the app was closed) and again on a
+  // periodic interval so it's also enforced across a long-running session
+  // without ever requiring a manual "empty trash" action.
+  purgeOldTrash().catch(e => console.error('Startup trash purge failed:', e));
+  setInterval(() => {
+    purgeOldTrash().catch(e => console.error('Periodic trash purge failed:', e));
+  }, 6 * 60 * 60 * 1000); // every 6h
 
   // Global "new note" hotkey -- registered once here at startup (not
   // per-window) and unregistered in the 'will-quit' handler below, per
