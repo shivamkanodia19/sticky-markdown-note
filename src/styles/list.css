@@ -204,26 +204,6 @@
     height: 14px;
 }
 
-/* Source badge (Item 9): link glyph + count on rows whose note has attached
-   browser-window sources. Same accent-soft pill language the note window's
-   own source toggle uses. */
-.source-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    padding: 1px 5px;
-    border-radius: var(--radius-sm);
-    background-color: var(--accent-soft);
-    color: var(--accent);
-    font-size: 11px;
-    font-weight: 600;
-}
-
-.source-badge svg {
-    width: 11px;
-    height: 11px;
-}
-
 .title {
     flex: 1;
     min-width: 0;

@@ -1,6 +1,6 @@
 {
   "name": "sticky-markdown",
-  "version": "1.5.5",
+  "version": "1.5.6",
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
@@ -22,7 +22,6 @@
     "dotenv": "^16.4.5",
     "electron-store": "^10.1.0",
     "electron-updater": "^6.6.2",
-    "get-windows": "^9.3.0",
     "katex": "^0.16.9",
     "marked": "^12.0.0",
     "turndown": "^7.2.0"
@@ -65,9 +64,6 @@
       "icon": "assets/icon.png"
     },
     "asar": true,
-    "asarUnpack": [
-      "**/node_modules/get-windows/**/*"
-    ],
     "publish": [
       {
         "provider": "github",

@@ -277,7 +277,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         score = titleMatch ? 2 : 1;
       }
 
-      visibleNotes.push({ note, content, score, color: noteMeta.color, chatgpt: !!noteMeta.chatgpt, sourceCount: noteMeta.sources || 0 });
+      visibleNotes.push({ note, content, score, color: noteMeta.color, chatgpt: !!noteMeta.chatgpt });
     });
 
     if (currentSearch) {
@@ -315,7 +315,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
-    visibleNotes.forEach(({ note, content, color, chatgpt, sourceCount }) => {
+    visibleNotes.forEach(({ note, content, color, chatgpt }) => {
       const titleHtml = currentSearch
         ? highlightMatch(getNoteTitle(content), currentSearch)
         : escapeHtml(getNoteTitle(content));
@@ -323,21 +323,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       const glyph = getSnippetGlyph(content);
       const glyphHtml = glyph ? GLYPH_SVG[glyph] : '';
 
-      // Right-aligned row indicators: a ChatGPT-mirror icon and a source
-      // count badge, grouped in one .meta-icons cluster. The cluster fades on
-      // row hover so the delete icon that shares the top-right corner has
-      // clean space (same trick the source badge already used). The note
-      // color now tints the whole card (data-color below), so there's no
-      // separate color dot anymore.
+      // Right-aligned row indicator: a ChatGPT-mirror icon (when the note is
+      // tagged), in a .meta-icons cluster that fades on row hover so the
+      // delete icon sharing the top-right corner has clean space. The note
+      // color tints the whole card (data-color below), so there's no separate
+      // color dot.
       const chatgptHtml = chatgpt
         ? `<span class="m-icon m-gpt" title="Mirrored to ChatGPT" aria-label="Mirrored to ChatGPT">${CHATGPT_ICON_SVG}</span>`
         : '';
-      const sourceLabel = `${sourceCount} source${sourceCount === 1 ? '' : 's'} attached`;
-      const sourceBadgeHtml = sourceCount > 0
-        ? `<span class="source-badge" title="${sourceLabel}" aria-label="${sourceLabel}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>${sourceCount}</span>`
-        : '';
-      const metaHtml = (chatgptHtml || sourceBadgeHtml)
-        ? `<span class="meta-icons">${chatgptHtml}${sourceBadgeHtml}</span>`
+      const metaHtml = chatgptHtml
+        ? `<span class="meta-icons">${chatgptHtml}</span>`
         : '';
 
       const div = document.createElement('div');
