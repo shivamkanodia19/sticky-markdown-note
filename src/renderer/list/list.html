@@ -42,8 +42,6 @@
         </div>
 
         <div id="filter-chips">
-            <button class="chip" data-filter="pinned">Pinned</button>
-            <button class="chip" data-filter="chatgpt">Sent to ChatGPT</button>
             <button class="chip chip-color" data-filter-color="yellow" data-color="yellow" title="Yellow" aria-label="Filter: yellow notes"></button>
             <button class="chip chip-color" data-filter-color="green" data-color="green" title="Green" aria-label="Filter: green notes"></button>
             <button class="chip chip-color" data-filter-color="blue" data-color="blue" title="Blue" aria-label="Filter: blue notes"></button>
@@ -60,10 +58,15 @@
                 New note
             </button>
             <div class="search-wrap">
-                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <svg class="icon search-lead" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
                 </svg>
                 <input id="search" type="text" placeholder="Search notes..." />
+                <button id="search-clear" title="Clear search" aria-label="Clear search">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 6 6 18"/><path d="M6 6l12 12"/>
+                    </svg>
+                </button>
             </div>
         </div>
         <div id="notes"></div>

@@ -58,7 +58,7 @@
     width: 100%;
     box-sizing: border-box;
     font-size: 13px;
-    padding: var(--space-2) var(--space-2) var(--space-2) 30px;
+    padding: var(--space-2) 30px var(--space-2) 30px;
     background-color: var(--surface);
     color: var(--text-primary);
     border: 1px solid var(--border);
@@ -71,52 +71,105 @@
     box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
-/* Note list */
+/* Clear-search button -- only shown while the field has text (via the
+   .has-text class list.js toggles on the wrapper). */
+#search-clear {
+    -webkit-app-region: no-drag;
+    position: absolute;
+    right: 5px;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    color: var(--text-secondary);
+    border-radius: 4px;
+}
+
+#search-clear svg {
+    width: 13px;
+    height: 13px;
+}
+
+.search-wrap.has-text #search-clear {
+    display: inline-flex;
+}
+
+#search-clear:hover {
+    background-color: var(--hover);
+    color: var(--text-primary);
+}
+
+/* Note list -- a vertical stack of spaced cards (redesign) rather than
+   full-bleed rows divided by hairlines. */
 #notes {
     flex: 1;
     overflow-y: auto;
+    padding: var(--space-2) var(--space-3) var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
 }
 
+/* Each note is a card tinted with its own color (redesign): the color IS the
+   card -- an Apple-Notes-subtle wash (--card-*, common.css) -- replacing the
+   old full-bleed row + hairline divider + separate color dot. A thin inset
+   left edge (::before, --edge-*) anchors the color without a hard full-height
+   stripe. Resting elevation + a 1px hover lift replace the old whole-row
+   scale(.94) press, which visibly jittered layout on every click. */
 .note {
     position: relative;
-    padding: var(--space-3) var(--space-4);
-    border-bottom: 1px solid var(--border);
-    /* Item 1: bold color presence. Width bumped from the old 3px hover-only
-       accent hairline to a 4px stripe that's ALWAYS colored (per-note,
-       via data-color below) rather than only appearing on hover -- the goal
-       is the list reading as a pile of colored notes at rest, not just on
-       interaction. Reuses the same --swatch-* variables as the color-dot
-       and the note window's own color-picker swatches -- no new colors. */
-    border-left: 4px solid transparent;
+    padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+    border-radius: var(--radius);
+    background-color: var(--surface);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-separator);
     cursor: pointer;
     display: flex;
     flex-direction: column;
     gap: 2px;
-    transition: background-color 0.15s ease, transform 0.08s ease-out;
+    transition: box-shadow 0.16s ease, transform 0.1s ease, border-color 0.16s ease;
 }
 
-.note[data-color="yellow"]   { border-left-color: var(--swatch-yellow); }
-.note[data-color="green"]    { border-left-color: var(--swatch-green); }
-.note[data-color="blue"]     { border-left-color: var(--swatch-blue); }
-.note[data-color="purple"]   { border-left-color: var(--swatch-purple); }
-.note[data-color="pink"]     { border-left-color: var(--swatch-pink); }
-.note[data-color="gray"]     { border-left-color: var(--swatch-gray); }
-.note[data-color="charcoal"] { border-left-color: var(--swatch-charcoal); }
+.note::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 8px;
+    bottom: 8px;
+    width: 3px;
+    border-radius: 3px;
+    background-color: var(--row-edge, var(--border));
+}
+
+.note[data-color="yellow"]   { background-color: var(--card-yellow);   --row-edge: var(--edge-yellow); }
+.note[data-color="green"]    { background-color: var(--card-green);    --row-edge: var(--edge-green); }
+.note[data-color="blue"]     { background-color: var(--card-blue);     --row-edge: var(--edge-blue); }
+.note[data-color="purple"]   { background-color: var(--card-purple);   --row-edge: var(--edge-purple); }
+.note[data-color="pink"]     { background-color: var(--card-pink);     --row-edge: var(--edge-pink); }
+.note[data-color="gray"]     { background-color: var(--card-gray);     --row-edge: var(--edge-gray); }
+.note[data-color="charcoal"] { background-color: var(--card-charcoal); --row-edge: var(--edge-charcoal); }
+
+/* Charcoal is dark in both themes, so its card carries light text. */
+.note[data-color="charcoal"] .title { color: #F1EDF4; }
+.note[data-color="charcoal"] .snippet,
+.note[data-color="charcoal"] .snippet-glyph,
+.note[data-color="charcoal"] .time { color: #C7C1CF; }
 
 .note:hover {
-    background: var(--hover);
+    box-shadow: var(--shadow-popover);
+    transform: translateY(-1px);
+    border-color: var(--row-edge, var(--border));
 }
 
-/* Item 3: press feedback -- the row itself is the clickable target (opens
-   the note), not just its buttons, so it gets the same scale-down as every
-   other clickable element in this batch. */
 .note:active {
-    transform: scale(.94);
+    transform: translateY(0);
+    box-shadow: var(--shadow-separator);
 }
 
-/* Row for the color dot + title, side by side (Item 1's list-row
-   indicator). The title itself keeps its own ellipsis/overflow rules --
-   row-top just adds the dot ahead of it without disturbing that. */
+/* Title + right-aligned indicator cluster. */
 .row-top {
     display: flex;
     align-items: center;
@@ -124,20 +177,37 @@
     min-width: 0; /* let .title's text-overflow: ellipsis actually apply */
 }
 
-.color-dot {
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
+/* ChatGPT icon + source badge, grouped at the row's right edge. The cluster
+   fades on hover so the delete icon (same top-right corner) has clean space
+   -- same trick the source badge used on its own before. */
+.meta-icons {
     flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    transition: opacity 0.15s ease;
+}
+
+.note:hover .meta-icons {
+    opacity: 0;
+}
+
+.m-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent);
+}
+
+.m-icon svg {
+    width: 14px;
+    height: 14px;
 }
 
 /* Source badge (Item 9): link glyph + count on rows whose note has attached
    browser-window sources. Same accent-soft pill language the note window's
-   own source toggle uses. flex-shrink:0 so it never squeezes; it and the
-   hover-only .delete-btn share the top-right corner, so it fades out on row
-   hover to hand that space cleanly to the trash icon. */
+   own source toggle uses. */
 .source-badge {
-    flex-shrink: 0;
     display: inline-flex;
     align-items: center;
     gap: 3px;
@@ -147,25 +217,12 @@
     color: var(--accent);
     font-size: 11px;
     font-weight: 600;
-    transition: opacity 0.15s ease;
 }
 
 .source-badge svg {
     width: 11px;
     height: 11px;
 }
-
-.note:hover .source-badge {
-    opacity: 0;
-}
-
-.color-dot[data-color="yellow"]   { background-color: var(--swatch-yellow); }
-.color-dot[data-color="green"]    { background-color: var(--swatch-green); }
-.color-dot[data-color="blue"]     { background-color: var(--swatch-blue); }
-.color-dot[data-color="purple"]   { background-color: var(--swatch-purple); }
-.color-dot[data-color="pink"]     { background-color: var(--swatch-pink); }
-.color-dot[data-color="gray"]     { background-color: var(--swatch-gray); }
-.color-dot[data-color="charcoal"] { background-color: var(--swatch-charcoal); }
 
 .title {
     flex: 1;

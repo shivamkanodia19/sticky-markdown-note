@@ -65,6 +65,22 @@
     --swatch-pink: #DD93B0;
     --swatch-gray: #A6A6AC;
     --swatch-charcoal: #4A4850;
+
+    /* List-card tints (Memo List redesign): the note color tints the whole
+       list card, Apple-Notes-subtle. Values intentionally match each color's
+       note-WINDOW --bg tint (body[data-color] below) so a card and the note
+       it opens read as the same object. --edge-* is the swatch itself, used
+       for a thin left color edge on the card. Charcoal is dark in both
+       themes (its own note reads "always dark"), so its card carries light
+       text -- see list.css. Dark-mode values are re-declared in
+       body.dark-mode below, same pattern as every other token here. */
+    --card-yellow: #FBF3D9;   --edge-yellow: var(--swatch-yellow);
+    --card-green:  #E7F1E9;   --edge-green:  var(--swatch-green);
+    --card-blue:   #E6EEF6;   --edge-blue:   var(--swatch-blue);
+    --card-purple: #F0E7F3;   --edge-purple: var(--swatch-purple);
+    --card-pink:   #F8E9EF;   --edge-pink:   var(--swatch-pink);
+    --card-gray:   #ECECEE;   --edge-gray:   var(--swatch-gray);
+    --card-charcoal: #46434C; --edge-charcoal: #6E6A76;
 }
 
 /* Per-note color tint (light mode). Overrides the same --bg/--surface/
@@ -121,6 +137,17 @@ body.dark-mode {
        versions of the light-mode values. */
     --shadow-separator: 0 1px 2px rgba(0, 0, 0, .5);
     --shadow-popover: 0 4px 12px rgba(0, 0, 0, .45), 0 1px 3px rgba(0, 0, 0, .3);
+
+    /* Dark-mode list-card tints -- match each color's dark note-window --bg
+       (body.dark-mode[data-color] above) for the same card-equals-its-note
+       cohesion as the light values. */
+    --card-yellow: #2E2A1C;
+    --card-green:  #1E2A20;
+    --card-blue:   #1C2734;
+    --card-purple: #2A2034;
+    --card-pink:   #301F27;
+    --card-gray:   #2A2A2E;
+    --card-charcoal: #46434C;
 }
 
 /* Base styles.

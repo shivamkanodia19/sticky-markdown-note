@@ -18,21 +18,29 @@ let shortcuts = {};
 // different data and a different per-row action button.
 let viewMode = 'notes';
 
-// Filter chips (redesign Item 3) -- AND'd together across categories
-// (pinned/chatgpt/color), but OR'd within the color set itself: a note has
-// exactly one color, so selecting two colors and AND-ing them would always
-// show zero notes, which isn't a useful filter. Selecting "blue" + "green"
-// means "blue OR green", same as selecting just "Pinned" means every pinned
-// note regardless of color.
+// Color filter chips -- OR'd within the color set: a note has exactly one
+// color, so AND-ing two colors would always show zero. Selecting
+// "blue" + "green" means "blue OR green". (The old Pinned / Sent-to-ChatGPT
+// filter chips were removed -- pin-by-default made the Pinned filter
+// near-useless, and ChatGPT state now reads directly off each row as an icon
+// instead of being filter-only.)
 const activeFilters = {
-  pinned: false,
-  chatgpt: false,
   colors: new Set(),
 };
 
 function getNoteTitle(content) {
-  const firstLine = content.split('\n')[0];
-  return firstLine.trim().substring(0, 30) || '(No title)';
+  // Strip leading markdown so a note whose first line is "# Q3 plan" or
+  // "- [ ] task" shows a clean title, not the raw syntax. Cap at 80 chars as
+  // a safety bound; the actual visual truncation is CSS ellipsis on .title,
+  // so long titles cut with "..." mid-card instead of a hard mid-word slice.
+  const firstLine = (content.split('\n')[0] || '')
+    .replace(/^#{1,6}\s+/, '')             // heading marker
+    .replace(/^[-*+]\s+\[[ xX]\]\s*/, '')  // checklist item
+    .replace(/^[-*+]\s+/, '')              // bullet
+    .replace(/^>\s+/, '')                  // blockquote
+    .replace(/[*_`]/g, '')                 // emphasis / inline code
+    .trim();
+  return firstLine.substring(0, 80) || '(No title)';
 }
 
 // Strips the raw markdown syntax markers that would otherwise show up
@@ -78,6 +86,13 @@ const GLYPH_SVG = {
   checklist: '<svg class="snippet-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m9 12 2 2 4-4"/></svg>',
   image: '<svg class="snippet-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>',
 };
+
+// Row indicator for "this note is mirrored to ChatGPT" (redesign: pin/ChatGPT
+// state surfaced on the row). No pin equivalent -- notes pin by default, so a
+// pin icon would show on nearly every row and carry no signal; ChatGPT
+// tagging is opt-in per note, so it's worth flagging. Same upload-to-cloud
+// glyph the note window's own ChatGPT toggle uses.
+const CHATGPT_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 13v8"/><path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2"/><path d="m8 17 4-4 4 4"/></svg>';
 
 function escapeHtml(str) {
   return str
@@ -195,24 +210,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   trashBack.addEventListener('click', () => setViewMode('notes'));
 
-  // Whether a note's metadata satisfies every currently-active filter chip.
-  // AND across categories, OR within the color set (see activeFilters'
-  // own comment above for why).
+  // Whether a note's color satisfies the active color filter (OR within the
+  // selected color set; no filter selected => everything passes).
   function matchesActiveFilters(meta) {
-    if (activeFilters.pinned && !meta.pinned) return false;
-    if (activeFilters.chatgpt && !meta.chatgpt) return false;
     if (activeFilters.colors.size > 0 && !activeFilters.colors.has(meta.color)) return false;
     return true;
   }
-
-  filterChips.querySelectorAll('.chip[data-filter]').forEach(chip => {
-    chip.addEventListener('click', () => {
-      const key = chip.dataset.filter; // 'pinned' | 'chatgpt'
-      activeFilters[key] = !activeFilters[key];
-      chip.classList.toggle('active', activeFilters[key]);
-      loadNotes();
-    });
-  });
 
   filterChips.querySelectorAll('.chip-color[data-filter-color]').forEach(chip => {
     chip.addEventListener('click', () => {
@@ -274,7 +277,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         score = titleMatch ? 2 : 1;
       }
 
-      visibleNotes.push({ note, content, score, color: noteMeta.color, sourceCount: noteMeta.sources || 0 });
+      visibleNotes.push({ note, content, score, color: noteMeta.color, chatgpt: !!noteMeta.chatgpt, sourceCount: noteMeta.sources || 0 });
     });
 
     if (currentSearch) {
@@ -283,7 +286,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       visibleNotes.sort((a, b) => b.score - a.score);
     }
 
-    const filtersActive = activeFilters.pinned || activeFilters.chatgpt || activeFilters.colors.size > 0;
+    const filtersActive = activeFilters.colors.size > 0;
 
     if (visibleNotes.length === 0) {
       const empty = document.createElement('div');
@@ -312,7 +315,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
-    visibleNotes.forEach(({ note, content, color, sourceCount }) => {
+    visibleNotes.forEach(({ note, content, color, chatgpt, sourceCount }) => {
       const titleHtml = currentSearch
         ? highlightMatch(getNoteTitle(content), currentSearch)
         : escapeHtml(getNoteTitle(content));
@@ -320,23 +323,30 @@ document.addEventListener('DOMContentLoaded', async () => {
       const glyph = getSnippetGlyph(content);
       const glyphHtml = glyph ? GLYPH_SVG[glyph] : '';
 
-      // Source badge (Item 9): link glyph + count when a note has one or more
-      // attached browser-window sources (count comes from get-note-meta, same
-      // single bulk read as color/pinned/chatgpt). Fades on row hover so the
-      // delete icon that shares the top-right corner has clean space.
+      // Right-aligned row indicators: a ChatGPT-mirror icon and a source
+      // count badge, grouped in one .meta-icons cluster. The cluster fades on
+      // row hover so the delete icon that shares the top-right corner has
+      // clean space (same trick the source badge already used). The note
+      // color now tints the whole card (data-color below), so there's no
+      // separate color dot anymore.
+      const chatgptHtml = chatgpt
+        ? `<span class="m-icon m-gpt" title="Mirrored to ChatGPT" aria-label="Mirrored to ChatGPT">${CHATGPT_ICON_SVG}</span>`
+        : '';
       const sourceLabel = `${sourceCount} source${sourceCount === 1 ? '' : 's'} attached`;
       const sourceBadgeHtml = sourceCount > 0
         ? `<span class="source-badge" title="${sourceLabel}" aria-label="${sourceLabel}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>${sourceCount}</span>`
         : '';
+      const metaHtml = (chatgptHtml || sourceBadgeHtml)
+        ? `<span class="meta-icons">${chatgptHtml}${sourceBadgeHtml}</span>`
+        : '';
 
       const div = document.createElement('div');
       div.className = 'note';
-      div.dataset.color = color; // drives the left-edge color stripe (Item 1)
+      div.dataset.color = color; // drives the whole-card color tint (--card-*)
       div.innerHTML = `
                 <div class="row-top">
-                  <span class="color-dot" data-color="${color}" title="${color}"></span>
                   <div class="title">${titleHtml}</div>
-                  ${sourceBadgeHtml}
+                  ${metaHtml}
                 </div>
                 <div class="snippet">${glyphHtml}<span class="snippet-text">${snippetHtml}</span></div>
                 <div class="time">${new Date(note.mtime).toLocaleString()}</div>
@@ -425,7 +435,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       div.dataset.color = item.color;
       div.innerHTML = `
                 <div class="row-top">
-                  <span class="color-dot" data-color="${item.color}" title="${item.color}"></span>
                   <div class="title">${titleHtml}</div>
                 </div>
                 <div class="snippet">${glyphHtml}<span class="snippet-text">${snippetHtml}</span></div>
@@ -460,9 +469,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderCurrentView();
   });
 
+  // Search + its clear button. The clear button only shows while the field
+  // has text (via the .has-text class on the wrapper); clicking it empties
+  // the field, re-runs the (now empty) search, and re-focuses the input.
+  const searchClear = document.getElementById('search-clear');
+  const searchWrap = searchInput.closest('.search-wrap');
   searchInput.addEventListener('input', e => {
     currentSearch = e.target.value.toLowerCase();
+    searchWrap.classList.toggle('has-text', e.target.value.length > 0);
     loadNotes();
+  });
+  searchClear.addEventListener('click', () => {
+    searchInput.value = '';
+    currentSearch = '';
+    searchWrap.classList.remove('has-text');
+    loadNotes();
+    searchInput.focus();
   });
 
   // Load shortcuts
