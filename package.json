@@ -1,6 +1,6 @@
 {
   "name": "sticky-markdown",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",

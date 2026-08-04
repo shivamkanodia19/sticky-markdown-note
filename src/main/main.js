@@ -223,13 +223,25 @@ function createMainWindow() {
 
   mainWindow.loadFile('src/renderer/list/list.html');
 
-  // Set initial theme and show window when ready
+  // Show on ready-to-show (first frame) with a fallback timer, same reasoning
+  // as createNoteWindow: a slow renderer spawn on this machine otherwise left
+  // the Memo List hidden for several seconds after launch. showList() is
+  // idempotent.
+  let listShown = false;
+  const showList = () => {
+    if (listShown || mainWindow.isDestroyed()) return;
+    listShown = true;
+    mainWindow.show();
+    mainWindow.focus();
+  };
+  mainWindow.once('ready-to-show', showList);
+  setTimeout(showList, 1200);
+
+  // Apply the saved/system theme once the page's DOM + scripts have loaded.
   mainWindow.webContents.once('did-finish-load', () => {
     if (store) {
       mainWindow.webContents.send('theme-changed', store.get('theme'));
     }
-    mainWindow.show();
-    mainWindow.focus();
   });
 
   // Settings button click event handler
@@ -301,10 +313,19 @@ function createNoteWindow(notePath, position = null, isNew = false) {
     return;
   }
 
-  // If window is already open, just focus it
+  // If window is already open, reveal it. A session-restored note is
+  // registered here but can still be hidden -- its renderer may not have
+  // painted yet (see the ready-to-show/fallback show logic below), and a
+  // user-minimized note is hidden too. In both cases plain focus() cannot
+  // make an invisible window appear, so clicking such a note in the Memo List
+  // looked like a dead no-op. show() (+ restore if minimized) guarantees it
+  // actually comes to the foreground.
   if (openNoteWindows[fullPath]) {
-    if (!openNoteWindows[fullPath].isDestroyed()) {
-      openNoteWindows[fullPath].focus();
+    const existing = openNoteWindows[fullPath];
+    if (!existing.isDestroyed()) {
+      if (existing.isMinimized()) existing.restore();
+      existing.show();
+      existing.focus();
       return;
     } else {
       // If destroyed but still registered -> clean up and reopen
@@ -349,17 +370,31 @@ function createNoteWindow(notePath, position = null, isNew = false) {
 
   win.loadFile('src/renderer/note/note.html');
 
-  // Set initial theme and show window when ready
+  // Show the window as soon as its first frame is ready (ready-to-show)
+  // instead of waiting for did-finish-load. On this machine a note window's
+  // renderer can take several seconds to spin up (antivirus scans each
+  // freshly-spawned Electron process), and gating show() on the *full* page
+  // load left session-restored notes invisible for that entire stretch --
+  // the note appeared impossible to open. A fallback timer force-shows the
+  // window if ready-to-show is itself slow, so a note can never get stuck
+  // hidden. showNote() is idempotent.
+  let shown = false;
+  const showNote = () => {
+    if (shown || win.isDestroyed()) return;
+    shown = true;
+    win.show();
+    win.focus();
+  };
+  win.once('ready-to-show', showNote);
+  setTimeout(showNote, 1200);
+
+  // Apply the saved/system theme once the page's DOM + scripts have loaded.
   win.webContents.once('did-finish-load', () => {
     if (store) { // Ensure 'store' is initialized before accessing it
       win.webContents.send('theme-changed', store.get('theme'));
     } else {
       console.warn("Store not initialized when setting initial theme for note window.");
     }
-    
-    // Show window and focus it
-    win.show();
-    win.focus();
   });
 
   win.notePath = notePath;
