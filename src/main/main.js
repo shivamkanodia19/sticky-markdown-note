@@ -1451,9 +1451,21 @@ app.on('ready', async () => {
   // directly above -- deferred here so 'get-open-windows'/'focus-source-
   // window' (registered at module scope, further down this file) are already
   // registered before any window exists to race them; openWindows is simply
-  // unset until this line runs, which always completes before a renderer is
-  // alive to invoke either handler.
-  ({ openWindows } = await import('get-windows'));
+  // unset until this line runs.
+  //
+  // CRITICAL: this MUST be non-fatal. It is an optional feature (the note
+  // "source" popover), but it runs before createMainWindow() and the session
+  // restore below -- so if the import throws (e.g. its native binding can't
+  // be resolved out of the asar in a packaged build), an un-caught rejection
+  // here aborts the entire ready handler and NO window ever opens, making the
+  // whole app look dead. Swallowing it leaves openWindows undefined, which
+  // listRecognizedBrowserWindows() already treats as "no sources available".
+  try {
+    ({ openWindows } = await import('get-windows'));
+  } catch (e) {
+    console.error('get-windows failed to load; note "source" feature disabled for this session:', e);
+    openWindows = null;
+  }
 
   // Initial theme setting (system theme or stored setting)
   if (store.get('theme') === undefined) {

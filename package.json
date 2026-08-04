@@ -1,6 +1,6 @@
 {
   "name": "sticky-markdown",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
@@ -66,7 +66,7 @@
     },
     "asar": true,
     "asarUnpack": [
-      "**/node_modules/get-windows/**"
+      "**/node_modules/get-windows/**/*"
     ],
     "publish": [
       {
