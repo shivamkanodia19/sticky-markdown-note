@@ -866,6 +866,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     captureScreenshot().catch(err => console.error('Screenshot capture failed:', err));
   });
 
+  // Auto-start the snip when this note was opened via the list's "Screenshot"
+  // tile (main.js sends this once, after load-note, only for such notes).
+  ipcRenderer.on('start-screenshot', () => {
+    captureScreenshot().catch(err => console.error('Screenshot capture failed:', err));
+  });
+
   function saveSettings() {
     const settings = { fontSize: currentFontSize };
     fs.writeFile(settingsPath, JSON.stringify(settings, null, 2), () => {});

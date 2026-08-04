@@ -18,16 +18,6 @@ let shortcuts = {};
 // different data and a different per-row action button.
 let viewMode = 'notes';
 
-// Color filter chips -- OR'd within the color set: a note has exactly one
-// color, so AND-ing two colors would always show zero. Selecting
-// "blue" + "green" means "blue OR green". (The old Pinned / Sent-to-ChatGPT
-// filter chips were removed -- pin-by-default made the Pinned filter
-// near-useless, and ChatGPT state now reads directly off each row as an icon
-// instead of being filter-only.)
-const activeFilters = {
-  colors: new Set(),
-};
-
 function getNoteTitle(content) {
   // Strip leading markdown so a note whose first line is "# Q3 plan" or
   // "- [ ] task" shows a clean title, not the raw syntax. Cap at 80 chars as
@@ -176,7 +166,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const trashBack = document.getElementById('trash-back');
   const trashBanner = document.getElementById('trash-banner');
   const toolbar = document.getElementById('toolbar');
-  const filterChips = document.getElementById('filter-chips');
 
   settingsButton.addEventListener('click', () => { // Add event listener for settings button
     ipcRenderer.send('open-settings-window');
@@ -200,7 +189,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const inTrash = viewMode === 'trash';
     trashBanner.classList.toggle('hidden', !inTrash);
     toolbar.classList.toggle('hidden', inTrash);
-    filterChips.classList.toggle('hidden', inTrash);
     trashButton.classList.toggle('active', inTrash);
     renderCurrentView();
   }
@@ -209,27 +197,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     setViewMode(viewMode === 'trash' ? 'notes' : 'trash');
   });
   trashBack.addEventListener('click', () => setViewMode('notes'));
-
-  // Whether a note's color satisfies the active color filter (OR within the
-  // selected color set; no filter selected => everything passes).
-  function matchesActiveFilters(meta) {
-    if (activeFilters.colors.size > 0 && !activeFilters.colors.has(meta.color)) return false;
-    return true;
-  }
-
-  filterChips.querySelectorAll('.chip-color[data-filter-color]').forEach(chip => {
-    chip.addEventListener('click', () => {
-      const color = chip.dataset.filterColor;
-      if (activeFilters.colors.has(color)) {
-        activeFilters.colors.delete(color);
-        chip.classList.remove('active');
-      } else {
-        activeFilters.colors.add(color);
-        chip.classList.add('active');
-      }
-      loadNotes();
-    });
-  });
 
   async function loadNotes() {
     container.innerHTML = '';
@@ -262,8 +229,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       const lowerTitle = getNoteTitle(content).toLowerCase();
       const noteMeta = meta[note.fullPath] || { color: 'yellow', pinned: true, chatgpt: false };
 
-      if (!matchesActiveFilters(noteMeta)) return;
-
       // Ranking (Item 5): title matches outrank content-only matches. Score
       // stays 0 (all equal) when there's no search, so the existing mtime
       // order below is untouched in the no-search case -- this is a
@@ -286,18 +251,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       visibleNotes.sort((a, b) => b.score - a.score);
     }
 
-    const filtersActive = activeFilters.colors.size > 0;
-
     if (visibleNotes.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'empty-state';
-      if (currentSearch || filtersActive) {
-        // Search/filter-empty ("no results for this query/filter combo") is
-        // a different state than "you have zero notes at all" -- text only,
-        // no glyph, same as before.
-        empty.textContent = currentSearch
-          ? 'No notes match your search.'
-          : 'No notes match the selected filters.';
+      if (currentSearch) {
+        // Search-empty ("no results for this query") is a different state than
+        // "you have zero notes at all" -- text only, no glyph, same as before.
+        empty.textContent = 'No notes match your search.';
       } else {
         // Zero-notes empty state (Item 3): a small static sticky-note glyph
         // above the existing text, matching the Lucide-style stroke icons
@@ -460,6 +420,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     ipcRenderer.send('create-new-note');
   });
 
+  // Screenshot tile: creates a new note and immediately kicks off the native
+  // snip in it (main.js gates the snip on that note window signalling ready,
+  // so there's no race against window creation).
+  const screenshotTile = document.getElementById('screenshot-tile');
+  screenshotTile.addEventListener('click', () => {
+    ipcRenderer.send('create-new-note-screenshot');
+  });
+
   ipcRenderer.on('refresh-list', () => {
     renderCurrentView();
   });
@@ -480,6 +448,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     searchWrap.classList.remove('has-text');
     loadNotes();
     searchInput.focus();
+  });
+
+  // Collapsible search (MS-style): the field is hidden until the magnifier is
+  // clicked, then it replaces the "Recent notes" label inline. It collapses
+  // back to the label when emptied and blurred, or on Escape.
+  const searchToggle = document.getElementById('search-toggle');
+  const recentHeader = searchInput.closest('.recent-header');
+  searchToggle.addEventListener('click', () => {
+    recentHeader.classList.add('searching');
+    searchInput.focus();
+  });
+  searchInput.addEventListener('blur', () => {
+    if (!searchInput.value) recentHeader.classList.remove('searching');
+  });
+  searchInput.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      searchInput.value = '';
+      currentSearch = '';
+      searchWrap.classList.remove('has-text');
+      recentHeader.classList.remove('searching');
+      loadNotes();
+    }
   });
 
   // Load shortcuts
@@ -517,9 +507,12 @@ document.addEventListener('DOMContentLoaded', async () => {
           case 'new-note':
             ipcRenderer.send('create-new-note');
             return;
-          case 'focus-search':
+          case 'focus-search': {
+            const rh = document.querySelector('.recent-header');
+            if (rh) rh.classList.add('searching');
             document.getElementById('search').focus();
             return;
+          }
         }
       }
     }

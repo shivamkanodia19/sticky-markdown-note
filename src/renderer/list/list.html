@@ -8,7 +8,13 @@
     </head>
     <body>
         <div id="titlebar">
-            <span>Sticky Markdown Note</span>
+            <span class="app-title">
+                <svg class="app-glyph" viewBox="0 0 24 24" fill="none" stroke="none" aria-hidden="true">
+                    <path d="M4 4h16v11l-5 5H4z" fill="#FBE885"/>
+                    <path d="M20 15l-5 5v-5z" fill="#000" fill-opacity="0.18"/>
+                </svg>
+                Sticky Markdown Note
+            </span>
             <div>
                 <button id="trash-button" class="title-btn" title="Recently Deleted" aria-label="Recently Deleted">
                     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
@@ -41,30 +47,44 @@
             <span>Recently Deleted <small>(kept 48h)</small></span>
         </div>
 
-        <div id="filter-chips">
-            <button class="chip chip-color" data-filter-color="yellow" data-color="yellow" title="Yellow" aria-label="Filter: yellow notes"></button>
-            <button class="chip chip-color" data-filter-color="green" data-color="green" title="Green" aria-label="Filter: green notes"></button>
-            <button class="chip chip-color" data-filter-color="blue" data-color="blue" title="Blue" aria-label="Filter: blue notes"></button>
-            <button class="chip chip-color" data-filter-color="purple" data-color="purple" title="Purple" aria-label="Filter: purple notes"></button>
-            <button class="chip chip-color" data-filter-color="pink" data-color="pink" title="Pink" aria-label="Filter: pink notes"></button>
-            <button class="chip chip-color" data-filter-color="gray" data-color="gray" title="Gray" aria-label="Filter: gray notes"></button>
-            <button class="chip chip-color" data-filter-color="charcoal" data-color="charcoal" title="Charcoal" aria-label="Filter: charcoal notes"></button>
-        </div>
         <div id="toolbar">
-            <button id="add" class="primary">
-                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 5v14"/><path d="M5 12h14"/>
-                </svg>
-                New note
-            </button>
-            <div class="search-wrap">
-                <svg class="icon search-lead" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
-                </svg>
-                <input id="search" type="text" placeholder="Search notes..." />
-                <button id="search-clear" title="Clear search" aria-label="Clear search">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M18 6 6 18"/><path d="M6 6l12 12"/>
+            <!-- MS Sticky Notes' two large action tiles: New note + Screenshot,
+                 side by side, equal width. -->
+            <div class="action-tiles">
+                <button id="add" class="tile">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 5v14"/><path d="M5 12h14"/>
+                    </svg>
+                    <span>New note</span>
+                </button>
+                <button id="screenshot-tile" class="tile">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>
+                    </svg>
+                    <span>Screenshot</span>
+                </button>
+            </div>
+
+            <!-- "Recent notes" row: a label on the left with a search affordance
+                 on the right. Clicking the magnifier expands an inline search
+                 field (MS hides search behind the icon rather than showing a
+                 permanent search bar). -->
+            <div class="recent-header">
+                <span class="recent-label">Recent notes</span>
+                <div class="search-wrap">
+                    <svg class="icon search-lead" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+                    </svg>
+                    <input id="search" type="text" placeholder="Search notes..." />
+                    <button id="search-clear" title="Clear search" aria-label="Clear search">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M18 6 6 18"/><path d="M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                <button id="search-toggle" class="title-btn" title="Search notes" aria-label="Search notes">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
                     </svg>
                 </button>
             </div>

@@ -8,6 +8,12 @@ html, body {
 body {
     display: flex;
     flex-direction: column;
+    /* Paper material: grain + sheen over the note's base color. Painted on
+       the (non-scrolling, window-filling) body so it stays put while the ink
+       scrolls -- the sheet stays still, the writing moves. #preview and the
+       bottom toolbar are transparent (below) so it reads as one continuous
+       surface. */
+    background: var(--paper-noise), var(--surface-sheen), var(--bg);
 }
 
 /* #preview: the single editable surface (architecture change). It used to
@@ -26,7 +32,9 @@ body {
     padding-top: var(--titlebar-height);
     padding-bottom: var(--toolbar-height);
     overflow-y: auto;
-    background-color: var(--bg);
+    /* Transparent so the body's paper material (grain + sheen) shows through
+       as one continuous sheet behind the text. */
+    background-color: transparent;
     color: var(--text-primary);
     /* Same system sans-serif stack as the rest of the UI (body's
        font-family in common.css) -- a serif default reads as a dated
@@ -50,7 +58,7 @@ body {
    contenteditable is emptied by deleting everything) so :empty actually
    matches. */
 #preview:empty::before {
-    content: 'Write here...';
+    content: 'Take a note';
     color: var(--text-secondary);
     pointer-events: none;
 }
@@ -167,8 +175,8 @@ body {
 
 #titlebar .title-btn#pin-toggle.pinned {
   opacity: 1 !important;
-  background-color: var(--accent) !important;
-  color: #FFFFFF !important;
+  background-color: var(--btn-active) !important;
+  color: var(--text-primary) !important;
 }
 
 /* ChatGPT destination toggle: same dimmed/highlighted treatment as the pin
@@ -179,8 +187,8 @@ body {
 
 #titlebar .title-btn#chatgpt-toggle.tagged {
   opacity: 1 !important;
-  background-color: var(--accent) !important;
-  color: #FFFFFF !important;
+  background-color: var(--btn-active) !important;
+  color: var(--text-primary) !important;
 }
 
 /* Screenshot button "pending" state: shown while polling the clipboard for
@@ -194,8 +202,8 @@ body {
    (important author rules now outrank animations), silently killing the
    pulse. */
 #titlebar .title-btn#screenshot-btn.pending {
-  background-color: var(--accent) !important;
-  color: #FFFFFF !important;
+  background-color: var(--btn-active) !important;
+  color: var(--text-primary) !important;
   animation: screenshot-pending-pulse 1.1s ease-in-out infinite;
 }
 
@@ -396,10 +404,20 @@ body {
   align-items: center;
   gap: var(--space-1);
   padding: 0 var(--space-2);
-  background-color: var(--titlebar-bg);
-  border-top: 1px solid var(--border);
+  /* MS keeps the formatting bar the same color as the note body (not a
+     separate darker strip) with only a hairline separating it -- so it reads
+     as part of the note surface, not a docked chrome bar. Transparent so the
+     body's paper material continues unbroken beneath the icons. */
+  background-color: transparent;
+  border-top: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
   z-index: 99;
   -webkit-app-region: no-drag;
+}
+
+/* Image button sits alone at the far right (MS puts the image/camera control
+   at the end of the formatting bar, split from the text-formatting cluster). */
+#bottom-toolbar #fmt-image {
+  margin-left: auto;
 }
 
 .tool-btn {

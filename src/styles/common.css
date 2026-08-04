@@ -1,19 +1,24 @@
 /* src/styles/common.css */
 
-/* Base variables (Light mode default) */
+/* Base variables (Light mode default).
+   Chrome palette copied from Microsoft Sticky Notes: neutral near-white
+   list/settings chrome (the colored notes are the only color in the app),
+   Fluent grays for text/borders, and a neutral dark "accent" (MS has no
+   brand hue -- its accent reads as a flat dark control fill / focus ring, not
+   a color). The per-note colors live in the swatch/tint blocks further down. */
 :root {
-    --bg: #FAF8F6;
+    --bg: #FBFBFB;
     --surface: #FFFFFF;
-    --titlebar-bg: #F1EEEA;
-    --text-primary: #2A2630;
-    --text-secondary: #6E6877;
-    --border: #E3DFDA;
-    --hover: #EFEAE5;
-    --accent: #7A5981;
-    --accent-soft: #EFE3F1;
-    --accent-hover: #6B4D71;
-    --danger: #B3413C;
-    --danger-soft: #F7E3E1;
+    --titlebar-bg: #FFFFFF;
+    --text-primary: #202020;
+    --text-secondary: #5C5C5C;
+    --border: #EAEAEA;
+    --hover: #F2F2F2;
+    --accent: #444444;
+    --accent-soft: #E8E8E8;
+    --accent-hover: #2B2B2B;
+    --danger: #C42B1C;
+    --danger-soft: #FDE7E9;
 
     /* Legacy names kept as aliases: note.css:91-128 (checkbox styling) is
        intentionally left untouched per the design brief and still refers to
@@ -34,9 +39,28 @@
        as sitting above the base surface, not just outlined.
        --radius-popover: floating chrome only -- deliberately larger than
        the base --radius (8px) so it visibly reads as "above" the window. */
+    /* Active/pressed fill for titlebar toggle buttons (pin, ChatGPT,
+       screenshot-pending). A translucent overlay so it tints the button's
+       own colored strip instead of stamping a flat neutral block on it --
+       flipped to a light overlay on dark themes/notes below, where a dark
+       overlay would be invisible. */
+    --btn-active: rgba(0, 0, 0, 0.12);
+
     --shadow-separator: 0 1px 2px rgba(0, 0, 0, .06);
     --shadow-popover: 0 4px 12px rgba(0, 0, 0, .10), 0 1px 3px rgba(0, 0, 0, .06);
     --radius-popover: 12px;
+
+    /* Paper material (MS-style texture): two translucent layers stacked over
+       whatever base color a surface already has, so every note color and both
+       themes get the same subtle depth with no per-color values.
+       --surface-sheen: a soft vertical gradient -- the top sits a touch deeper
+       (as if the header casts onto the sheet), fading to nothing by ~a third
+       down, with a whisper of light at the very bottom. --paper-noise: a faint
+       fractal grain (~5% alpha) that reads as paper tooth up close, invisible
+       from across the room. Layer order where used: noise on top, sheen under
+       it, base color under that. */
+    --surface-sheen: linear-gradient(180deg, rgba(0,0,0,0.10) 0%, rgba(0,0,0,0) 45%, rgba(255,255,255,0.11) 100%);
+    --paper-noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.05'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 
     /* Spacing system */
     --space-1: 4px;
@@ -58,13 +82,13 @@
        body[data-color="<name>"] tint overrides directly below, which
        reuse the exact same override-the-named-variable mechanism
        body.dark-mode already uses for --bg/--surface/--titlebar-bg. */
-    --swatch-yellow: #F5C84C;
-    --swatch-green: #7FB88F;
-    --swatch-blue: #7CA7D8;
-    --swatch-purple: #B48CC9;
-    --swatch-pink: #DD93B0;
-    --swatch-gray: #A6A6AC;
-    --swatch-charcoal: #4A4850;
+    --swatch-yellow: #FBE885;
+    --swatch-green: #B3E3AC;
+    --swatch-blue: #ABD1F0;
+    --swatch-purple: #D3B8EC;
+    --swatch-pink: #F5B4CC;
+    --swatch-gray: #D6D6D6;
+    --swatch-charcoal: #3A3941;
 
     /* List-card tints (Memo List redesign): the note color tints the whole
        list card, Apple-Notes-subtle. Values intentionally match each color's
@@ -74,13 +98,13 @@
        themes (its own note reads "always dark"), so its card carries light
        text -- see list.css. Dark-mode values are re-declared in
        body.dark-mode below, same pattern as every other token here. */
-    --card-yellow: #FBF3D9;   --edge-yellow: var(--swatch-yellow);
-    --card-green:  #E7F1E9;   --edge-green:  var(--swatch-green);
-    --card-blue:   #E6EEF6;   --edge-blue:   var(--swatch-blue);
-    --card-purple: #F0E7F3;   --edge-purple: var(--swatch-purple);
-    --card-pink:   #F8E9EF;   --edge-pink:   var(--swatch-pink);
-    --card-gray:   #ECECEE;   --edge-gray:   var(--swatch-gray);
-    --card-charcoal: #46434C; --edge-charcoal: #6E6A76;
+    --card-yellow: #FEF7A3;   --edge-yellow: var(--swatch-yellow);
+    --card-green:  #D6F0D2;   --edge-green:  var(--swatch-green);
+    --card-blue:   #D3E7F7;   --edge-blue:   var(--swatch-blue);
+    --card-purple: #E8D9F3;   --edge-purple: var(--swatch-purple);
+    --card-pink:   #FBD5E3;   --edge-pink:   var(--swatch-pink);
+    --card-gray:   #EAEAEA;   --edge-gray:   var(--swatch-gray);
+    --card-charcoal: #4B4A52; --edge-charcoal: #6E6A76;
 }
 
 /* Per-note color tint (light mode). Overrides the same --bg/--surface/
@@ -89,16 +113,17 @@
    just keeps using --bg/--surface/--titlebar-bg like it always has.
    Charcoal is the one swatch that also flips --text-* (real Sticky Notes'
    charcoal note reads as "always dark", light or dark app theme). */
-body[data-color="yellow"] { --bg: #FBF3D9; --surface: #FFFBEF; --titlebar-bg: #F5E7B8; }
-body[data-color="green"]  { --bg: #E7F1E9; --surface: #F2F8F3; --titlebar-bg: #D3E7D7; }
-body[data-color="blue"]   { --bg: #E6EEF6; --surface: #F1F6FB; --titlebar-bg: #D2E1F0; }
-body[data-color="purple"] { --bg: #F0E7F3; --surface: #F7F0F9; --titlebar-bg: #E1CDE9; }
-body[data-color="pink"]   { --bg: #F8E9EF; --surface: #FBF1F5; --titlebar-bg: #F0CFDD; }
-body[data-color="gray"]   { --bg: #ECECEE; --surface: #F5F5F6; --titlebar-bg: #DBDBDE; }
+body[data-color="yellow"] { --bg: #FEF7A3; --surface: #FFFCD6; --titlebar-bg: #FBE885; }
+body[data-color="green"]  { --bg: #D6F0D2; --surface: #E9F7E6; --titlebar-bg: #B3E3AC; }
+body[data-color="blue"]   { --bg: #D3E7F7; --surface: #E7F2FC; --titlebar-bg: #ABD1F0; }
+body[data-color="purple"] { --bg: #E8D9F3; --surface: #F2E9FA; --titlebar-bg: #D3B8EC; }
+body[data-color="pink"]   { --bg: #FBD5E3; --surface: #FDE8F0; --titlebar-bg: #F5B4CC; }
+body[data-color="gray"]   { --bg: #EAEAEA; --surface: #F5F5F5; --titlebar-bg: #D6D6D6; }
 body[data-color="charcoal"] {
-    --bg: #3C3A42; --surface: #46434C; --titlebar-bg: #2E2C33;
+    --bg: #4B4A52; --surface: #565560; --titlebar-bg: #3A3941;
     --text-primary: #F1EDF4; --text-secondary: #C7C1CF;
-    --border: #56525C; --hover: #4C4952;
+    --border: #5A5962; --hover: #565560;
+    --btn-active: rgba(255, 255, 255, 0.16);
 }
 
 /* Per-note color tint (dark mode). Same variables, muted/darkened so a
@@ -115,18 +140,21 @@ body.dark-mode[data-color="gray"]   { --bg: #2A2A2E; --surface: #333338; --title
 
 /* Dark mode variable override */
 body.dark-mode {
-    --bg: #1E1B22;
-    --surface: #262230;
-    --titlebar-bg: #17141C;
-    --text-primary: #ECE7F0;
-    --text-secondary: #A89FB2;
-    --border: #3A3542;
-    --hover: #2E2938;
-    --accent: #A57DB8;
-    --accent-soft: #362E3F;
-    --accent-hover: #B992CB;
-    --danger: #E2726B;
-    --danger-soft: #3B2422;
+    --bg: #202020;
+    --surface: #2B2B2B;
+    --titlebar-bg: #202020;
+    --text-primary: #F5F5F5;
+    --text-secondary: #ADADAD;
+    --border: #333333;
+    --hover: #2E2E2E;
+    --accent: #C8C8C8;
+    --accent-soft: #3A3A3A;
+    --accent-hover: #E0E0E0;
+    --danger: #FF99A4;
+    --danger-soft: #442726;
+    --btn-active: rgba(255, 255, 255, 0.16);
+    /* Deeper at the top on dark grounds so the sheen still reads. */
+    --surface-sheen: linear-gradient(180deg, rgba(0,0,0,0.22) 0%, rgba(0,0,0,0) 45%, rgba(255,255,255,0.06) 100%);
 
     --accent-color: var(--accent);
     --accent-hover-color: var(--accent-hover);

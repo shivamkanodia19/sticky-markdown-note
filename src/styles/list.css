@@ -1,3 +1,22 @@
+/* A faint paper grain across the list window, so the gutters between the
+   colored cards share the same tooth rather than reading as flat chrome. */
+body {
+    background-image: var(--paper-noise);
+}
+
+/* Header brand: a small sticky-note glyph + the app name, MS-style. */
+.app-title {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.app-glyph {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+}
+
 /* Recently Deleted titlebar toggle -- active state mirrors note.css's
    "#titlebar .title-btn#pin-toggle.pinned" (filled --accent, white icon),
    including the same ID-selector-over-class-selector specificity fix that
@@ -10,40 +29,101 @@
     color: #FFFFFF !important;
 }
 
-/* Toolbar styles */
+/* Toolbar: a vertical stack -- the two action tiles on top, the "Recent
+   notes" row (label + collapsible search) beneath. */
 #toolbar {
-    padding: var(--space-3) var(--space-4);
-    /* Item 1: shadow-based separator, same rationale as #titlebar
-       (common.css) -- see that rule's comment. */
-    box-shadow: var(--shadow-separator);
+    padding: var(--space-3) var(--space-4) var(--space-2);
     background: var(--bg);
     display: flex;
-    align-items: center;
-    gap: var(--space-2);
+    flex-direction: column;
+    gap: var(--space-3);
     -webkit-app-region: drag;
 }
 
-#add {
+/* MS's two big action tiles: equal-width, light-gray, centered icon+label. */
+.action-tiles {
     -webkit-app-region: no-drag;
-    flex-shrink: 0;
+    display: flex;
+    gap: var(--space-2);
+}
+
+.tile {
+    flex: 1;
     display: inline-flex;
     align-items: center;
-    gap: var(--space-1);
+    justify-content: center;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    background-color: var(--hover);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 600;
     white-space: nowrap;
-    background-color: var(--accent);
-    color: #FFFFFF;
 }
 
-#add:hover {
-    background-color: var(--accent-hover);
+.tile:hover {
+    background-color: var(--border);
 }
 
+.tile .icon {
+    color: var(--text-secondary);
+}
+
+/* "Recent notes" label + search affordance row. */
+.recent-header {
+    -webkit-app-region: drag;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 28px;
+}
+
+.recent-label {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+#search-toggle {
+    -webkit-app-region: no-drag;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    color: var(--text-secondary);
+    border: none;
+    border-radius: var(--radius-sm);
+}
+
+#search-toggle:hover {
+    background: var(--hover);
+    color: var(--text-primary);
+}
+
+/* Search field is hidden until the magnifier is clicked (the .searching
+   class, toggled in list.js). When searching, the field replaces the label +
+   toggle button inline. */
 .search-wrap {
     -webkit-app-region: no-drag;
     position: relative;
     flex: 1;
-    display: flex;
+    display: none;
     align-items: center;
+}
+
+.recent-header.searching .search-wrap {
+    display: flex;
+}
+
+.recent-header.searching .recent-label,
+.recent-header.searching #search-toggle {
+    display: none;
 }
 
 .search-wrap svg.icon {
@@ -113,44 +193,34 @@
     gap: var(--space-2);
 }
 
-/* Each note is a card tinted with its own color (redesign): the color IS the
-   card -- an Apple-Notes-subtle wash (--card-*, common.css) -- replacing the
-   old full-bleed row + hairline divider + separate color dot. A thin inset
-   left edge (::before, --edge-*) anchors the color without a hard full-height
-   stripe. Resting elevation + a 1px hover lift replace the old whole-row
-   scale(.94) press, which visibly jittered layout on every click. */
+/* Each note is a solid card in its own color -- MS shows the note's color as
+   the whole card, flat, with a hairline and a soft shadow (no left-edge
+   stripe). */
 .note {
     position: relative;
-    padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+    padding: var(--space-3) var(--space-4);
     border-radius: var(--radius);
-    background-color: var(--surface);
-    border: 1px solid var(--border);
+    background-color: var(--card-gray);
+    /* Same paper material as the note window: grain + sheen over the card's
+       own color (background-image layers, so the per-color background-color
+       below still shows through). */
+    background-image: var(--paper-noise), var(--surface-sheen);
+    border: 1px solid rgba(0, 0, 0, 0.06);
     box-shadow: var(--shadow-separator);
     cursor: pointer;
     display: flex;
     flex-direction: column;
     gap: 2px;
-    transition: box-shadow 0.16s ease, transform 0.1s ease, border-color 0.16s ease;
+    transition: box-shadow 0.16s ease, transform 0.1s ease;
 }
 
-.note::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 8px;
-    bottom: 8px;
-    width: 3px;
-    border-radius: 3px;
-    background-color: var(--row-edge, var(--border));
-}
-
-.note[data-color="yellow"]   { background-color: var(--card-yellow);   --row-edge: var(--edge-yellow); }
-.note[data-color="green"]    { background-color: var(--card-green);    --row-edge: var(--edge-green); }
-.note[data-color="blue"]     { background-color: var(--card-blue);     --row-edge: var(--edge-blue); }
-.note[data-color="purple"]   { background-color: var(--card-purple);   --row-edge: var(--edge-purple); }
-.note[data-color="pink"]     { background-color: var(--card-pink);     --row-edge: var(--edge-pink); }
-.note[data-color="gray"]     { background-color: var(--card-gray);     --row-edge: var(--edge-gray); }
-.note[data-color="charcoal"] { background-color: var(--card-charcoal); --row-edge: var(--edge-charcoal); }
+.note[data-color="yellow"]   { background-color: var(--card-yellow); }
+.note[data-color="green"]    { background-color: var(--card-green); }
+.note[data-color="blue"]     { background-color: var(--card-blue); }
+.note[data-color="purple"]   { background-color: var(--card-purple); }
+.note[data-color="pink"]     { background-color: var(--card-pink); }
+.note[data-color="gray"]     { background-color: var(--card-gray); }
+.note[data-color="charcoal"] { background-color: var(--card-charcoal); }
 
 /* Charcoal is dark in both themes, so its card carries light text. */
 .note[data-color="charcoal"] .title { color: #F1EDF4; }
@@ -161,7 +231,6 @@
 .note:hover {
     box-shadow: var(--shadow-popover);
     transform: translateY(-1px);
-    border-color: var(--row-edge, var(--border));
 }
 
 .note:active {
@@ -300,77 +369,6 @@ mark {
     width: 36px;
     height: 36px;
     opacity: 0.5;
-}
-
-/* Redesign Item 3: filter chips row, above the search bar. Small pill
-   toggles -- default state matches #search's own resting look (surface bg,
-   border, secondary text); active state reuses the exact --accent-soft-fill
-   + --accent-text pattern settings.css's ".shortcut-input.recording" already
-   uses for "this control is in a special active state" (see that rule) --
-   not a new visual language. */
-#filter-chips {
-    -webkit-app-region: drag;
-    padding: var(--space-2) var(--space-4) 0;
-    background: var(--bg);
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-1);
-}
-
-#filter-chips.hidden {
-    display: none;
-}
-
-.chip {
-    -webkit-app-region: no-drag;
-    font-size: 12px;
-    line-height: 1;
-    padding: 5px 10px;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    background-color: var(--surface);
-    color: var(--text-secondary);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.08s ease-out;
-}
-
-.chip:hover {
-    background-color: var(--hover);
-}
-
-.chip.active {
-    background-color: var(--accent-soft);
-    color: var(--accent);
-    border-color: var(--accent);
-}
-
-/* Per-color chips: a small filled circle (same --swatch-* mapping as
-   .color-dot/.note[data-color]) instead of a text label -- the color IS the
-   label. Active state is an accent ring around the swatch, echoing the
-   note window's own color-picker (.color-swatch.active shows a checkmark;
-   a ring reads the same way at this much smaller size without needing to
-   render a checkmark glyph legibly at 18px). */
-.chip-color {
-    width: 20px;
-    height: 20px;
-    padding: 0;
-    border-radius: 50%;
-    border: 1px solid var(--border);
-}
-
-.chip-color[data-color="yellow"]   { background-color: var(--swatch-yellow); }
-.chip-color[data-color="green"]    { background-color: var(--swatch-green); }
-.chip-color[data-color="blue"]     { background-color: var(--swatch-blue); }
-.chip-color[data-color="purple"]   { background-color: var(--swatch-purple); }
-.chip-color[data-color="pink"]     { background-color: var(--swatch-pink); }
-.chip-color[data-color="gray"]     { background-color: var(--swatch-gray); }
-.chip-color[data-color="charcoal"] { background-color: var(--swatch-charcoal); }
-
-.chip-color.active {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 #toolbar.hidden {

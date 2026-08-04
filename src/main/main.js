@@ -447,6 +447,8 @@ function createNoteWindow(notePath, position = null, isNew = false) {
 
   // Window is new, save session immediately
   writeSessionNow();
+
+  return win;
 }
 
 // Shared by createNewNote and the "Duplicate" more-menu action (Item 4) --
@@ -458,7 +460,7 @@ function generateNewNoteFilePath() {
   return path.join(notesDir, fileName);
 }
 
-function createNewNote(position = null) {
+function createNewNote(position = null, options = {}) {
   const filePath = generateNewNoteFilePath();
 
   // Create file with empty content
@@ -471,7 +473,14 @@ function createNewNote(position = null) {
   writeChatgptMirror(filePath, '').catch(() => {});
 
   // Open new window
-  createNoteWindow(filePath, position, /* isNew */ true);
+  const win = createNoteWindow(filePath, position, /* isNew */ true);
+
+  // "Screenshot" tile in the list: flag the window so it auto-starts the
+  // native snip once its renderer signals ready (see the 'note-ready'
+  // handler) -- gating on note-ready avoids racing the window's own load.
+  if (options.screenshot && win) {
+    win.screenshotOnOpen = true;
+  }
 
   // Request refresh to list window
   if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
@@ -637,11 +646,23 @@ ipcMain.on('note-ready', event => {
   if (win.notePath) {
     const isNew = !!win.isNewNote;
     win.webContents.send('load-note', win.notePath, isNew);
+
+    // A note opened via the list's "Screenshot" tile auto-starts the native
+    // snip now that its renderer is ready. One-shot: clear the flag so a
+    // later reload of the same window doesn't re-trigger it.
+    if (win.screenshotOnOpen) {
+      win.screenshotOnOpen = false;
+      win.webContents.send('start-screenshot');
+    }
   }
 });
 
 ipcMain.on('create-new-note', () => {
   createNewNote();
+});
+
+ipcMain.on('create-new-note-screenshot', () => {
+  createNewNote(null, { screenshot: true });
 });
 
 ipcMain.on('create-new-note-nearby', event => {
