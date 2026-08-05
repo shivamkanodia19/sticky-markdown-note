@@ -987,6 +987,69 @@ document.addEventListener('DOMContentLoaded', async () => {
     return null;
   }
 
+  // Finds the nearest block-level ancestor of the current selection (a
+  // <div>/<p>/<li>/heading -- whatever Chromium wrapped the current line in),
+  // used only by the '- ' auto-list shortcut below to know where "the start
+  // of this line" is. Falls back to #preview itself for the one case where
+  // there's no wrapping block yet: the very first line typed into a brand
+  // new, empty note.
+  function ancestorBlock(node) {
+    while (node && node !== preview) {
+      if (node.nodeType === 1) {
+        const display = window.getComputedStyle(node).display;
+        if (display === 'block' || display === 'list-item') return node;
+      }
+      node = node.parentNode;
+    }
+    return preview;
+  }
+
+  // Markdown-style auto-list shortcut (Item: '-' starts a bulleted list).
+  // Mirrors what Typora/Notion/Obsidian do: typing '-' then Space at the
+  // start of an otherwise-empty line converts that line into a bullet list
+  // item, instead of leaving a literal "- " for the user to format by hand.
+  // Detection happens on keydown for the Space key, BEFORE the space is
+  // inserted, by checking that everything in the current line from its
+  // start up to the cursor is exactly the single character '-'. Reuses the
+  // exact same execCommand('insertUnorderedList') the toolbar's Bullet list
+  // button (fmtListBtn) already calls, so the created list is
+  // indistinguishable from one made via the toolbar, and Turndown's
+  // bulletListMarker: '-' config (see createTurndownService above) means it
+  // round-trips back to the same '- ' markdown on save.
+  function tryDashAutoList(e, sel) {
+    if (e.key !== ' ') return false;
+    const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+    if (!range || !range.collapsed) return false;
+    // Skip inside an existing list item: execCommand('insertUnorderedList')
+    // TOGGLES, so firing it again here (e.g. typing '- ' to start a nested
+    // line inside an already-bulleted item) would strip the surrounding list
+    // instead of adding one -- let Space behave normally there.
+    if (ancestorListItem(sel)) return false;
+
+    const block = ancestorBlock(range.startContainer);
+    const blockRange = document.createRange();
+    blockRange.selectNodeContents(block);
+    blockRange.setEnd(range.startContainer, range.startOffset);
+    if (blockRange.toString() !== '-') return false;
+
+    e.preventDefault();
+    // Select the '-' and remove it via the native 'delete' command rather
+    // than a raw Range.deleteContents(). Verified live in Electron that the
+    // raw-Range path matters here: deleteContents() leaves a truly empty
+    // block with no placeholder <br>, and execCommand('insertUnorderedList')
+    // immediately afterward gets confused by that and wraps the PREVIOUS
+    // block instead of this one. Routing the deletion through execCommand
+    // too keeps Chromium's own empty-block/<br>-placeholder bookkeeping
+    // consistent, so the following insertUnorderedList reliably targets the
+    // now-empty current line.
+    sel.removeAllRanges();
+    sel.addRange(blockRange);
+    document.execCommand('delete');
+    document.execCommand('insertUnorderedList');
+    scheduleSave();
+    return true;
+  }
+
   // Checkbox-specific Enter handling (Item 5). The browser's native list
   // continuation (Enter in a plain <li> creates a new <li>) doesn't know to
   // carry a checkbox along -- it would just produce a checkbox-less line.
@@ -1086,6 +1149,10 @@ document.addEventListener('DOMContentLoaded', async () => {
           document.execCommand('insertText', false, '    ');
         }
         scheduleSave();
+        return;
+    }
+
+    if (e.key === ' ' && tryDashAutoList(e, sel)) {
         return;
     }
 

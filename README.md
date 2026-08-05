@@ -16,6 +16,7 @@ A lightweight, always-on-top sticky note applicatoin with Markdown support, buil
 - **Cross-Platform**: Supports both Windows and macOS (macOS version is built but not tested).
 - **Image Handling**: Paste images directly from clipboard, saved locally with automatic cleanup for orphaned images.
 - **Interactive Checkboxes**: Click rendered checkboxes in preview to update markdown.
+- **Markdown-Style List Shortcut**: Typing `-` then a space at the start of a line automatically turns it into a bulleted list item.
 
 ## Installation
 
